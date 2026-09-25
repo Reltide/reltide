@@ -36,6 +36,13 @@
   --accent: var(--surface-hover);
   --accent-foreground: var(--foreground);
   --input: var(--border);
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--accent-foreground);
+  --sidebar-ring: var(--ring);
+  --sidebar-primary-foreground: var(--primary-foreground);
 }
 
 .dark {
@@ -55,6 +62,62 @@
   --destructive: #f04438;
   --destructive-foreground: #171717;
   --success: #3fb950;
+}
+
+@utility geist-heading-hero {
+  font-size: 3rem;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+  font-weight: 600;
+}
+
+@utility geist-heading-hero-lg {
+  font-size: 4.5rem;
+  line-height: 1.05;
+  letter-spacing: -0.05em;
+  font-weight: 600;
+}
+
+@utility geist-heading-page {
+  font-size: 2.5rem;
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+  font-weight: 600;
+}
+
+@utility geist-heading-section {
+  font-size: 1.25rem;
+  line-height: 1.4;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+@utility geist-copy-large {
+  font-size: 1.125rem;
+  line-height: 1.6;
+  letter-spacing: -0.01em;
+  font-weight: 400;
+}
+
+@utility geist-copy-small {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+
+@utility geist-label {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+@utility geist-button {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  letter-spacing: 0;
+  font-weight: 500;
 }
 
 @theme inline {
