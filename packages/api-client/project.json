@@ -1,0 +1,6 @@
+{
+  "name": "@repo/api-client",
+  "projectType": "library",
+  "tags": ["scope:frontend", "type:generated-client"],
+  "implicitDependencies": ["reltide-api"]
+}

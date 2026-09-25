@@ -5,6 +5,7 @@ node_modules/
 .next/
 .source/
 dist/
+/target/
 *.tsbuildinfo
 
 # Next.js
