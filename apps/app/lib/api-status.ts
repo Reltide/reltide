@@ -16,7 +16,7 @@ export const getApiStatus = async (baseUrl?: string): Promise<ApiStatus> => {
     }
 
     const result = await getHealth({
-      baseUrl,
+      baseUrl: parsed.href.replace(/\/+$/u, ""),
       cache: "no-store",
       signal: AbortSignal.timeout(2000),
     });

@@ -8,8 +8,10 @@ import { test } from "vitest";
 import { getApiStatus } from "./api-status";
 
 const startServer = async (status: number, body: { status: string }) => {
-  const server = createServer((_request, response) => {
-    response.writeHead(status, { "content-type": "application/json" });
+  const server = createServer((request, response) => {
+    response.writeHead(request.url === "/api/v1/health" ? status : 404, {
+      "content-type": "application/json",
+    });
     response.end(JSON.stringify(body));
   });
   server.listen(0, "127.0.0.1");
@@ -30,6 +32,17 @@ test("the generated operation reports a healthy local API", async () => {
   const server = await startServer(200, { status: "ok" });
   try {
     assert.deepEqual(await getApiStatus(server.url), { kind: "available" });
+  } finally {
+    await server.close();
+  }
+});
+
+test("a base URL with a trailing slash reaches the healthy API", async () => {
+  const server = await startServer(200, { status: "ok" });
+  try {
+    assert.deepEqual(await getApiStatus(`${server.url}/`), {
+      kind: "available",
+    });
   } finally {
     await server.close();
   }
