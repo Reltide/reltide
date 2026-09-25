@@ -1,0 +1,21 @@
+{
+  "provider": "stripe",
+  "breakingChange": "2022-11-15 PaymentIntent.charges removal",
+  "target": {
+    "beforeSdkVersion": "10.17.0",
+    "beforeExplicitApiVersion": "2022-08-01",
+    "afterSdkVersion": "12.0.0",
+    "afterExplicitApiVersion": "2022-11-15",
+    "expectedDisposition": "migrate charges.data[0].id to latest_charge"
+  },
+  "pinnedVersion": {
+    "sdkVersion": "12.0.0",
+    "explicitApiVersion": "2022-08-01",
+    "expectedDisposition": "retain legacy response handling"
+  },
+  "ambiguousVersion": {
+    "sdkVersion": "10.17.0",
+    "accountDefaultApiVersion": null,
+    "expectedDisposition": "require version evidence before rewriting"
+  }
+}

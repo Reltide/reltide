@@ -1,0 +1,17 @@
+{
+  "name": "stripe-payment-intent-after",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:regression": "node --experimental-strip-types ../tests/regression.mjs after",
+    "test:variants": "node --experimental-strip-types ../tests/variants.mjs"
+  },
+  "dependencies": {
+    "stripe": "12.0.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

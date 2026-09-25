@@ -1,0 +1,17 @@
+{
+  "name": "stripe-payment-intent-before",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:baseline": "node --experimental-strip-types ../tests/baseline.mjs",
+    "test:regression": "node --experimental-strip-types ../tests/regression.mjs before"
+  },
+  "dependencies": {
+    "stripe": "10.17.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
