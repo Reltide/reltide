@@ -176,6 +176,9 @@ importers:
       '@commitlint/config-conventional':
         specifier: 21.2.3
         version: 21.2.3
+      '@commitlint/types':
+        specifier: 21.2.3
+        version: 21.2.3
       '@nx/next':
         specifier: 23.2.1
         version: 23.2.1(a5ea69f736595bb2f77417fb5296f0d4)
