@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+allowBuilds:
+  "@swc/core": true
+  esbuild: true
+  nx: true
+  sharp: true
+minimumReleaseAgeExclude:
+  - fumadocs-mdx@15.4.5
