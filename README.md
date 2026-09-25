@@ -19,6 +19,10 @@ pnpm rust:check
 
 Start one shell with `pnpm nx run app:dev`, `pnpm nx run web:dev`, or `pnpm nx run docs:dev`. They listen on ports 3000, 3001, and 3004. These initial frontend shells build without credentials or hosted services. They do not yet connect to repositories or run migrations.
 
+`pnpm check` runs a read-only workspace check with Ultracite's Oxlint and Oxfmt configuration. `pnpm nx run-many -t check` runs the same checks as cacheable Nx targets for each frontend project; `pnpm nx run app:check` checks one project. `pnpm typecheck` runs TypeScript separately, and `pnpm fix` applies available lint and formatting fixes. The JSON-only TypeScript config package uses Oxfmt for its Nx check target.
+
+Installation prepares the Husky pre-commit hook. It invokes the project-installed lint-staged and Ultracite binaries on supported staged files. lint-staged hides and restores unstaged edits in partially staged files, so the hook does not add unrelated working-tree edits to a commit.
+
 The layout keeps next-forge's `apps/` and `packages/` split. It was adapted from [next-forge commit `f189de7`](https://github.com/haydenbleasel/next-forge/tree/f189de79ceef7c1ef69f61f12e272f99b4cdb699) under its [MIT license](LICENSE.next-forge.md). The three Next.js app shells were generated with `@nx/next` 23.2.1; Nx replaces Turborepo. The upstream Mintlify docs were replaced with a Fumadocs shell, and the Next.js backend integrations were removed for the planned Rust backend.
 
 ## Rust workspace
