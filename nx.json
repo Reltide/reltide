@@ -31,7 +31,11 @@
       "{workspaceRoot}/pnpm-lock.yaml",
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/pnpm-workspace.yaml",
-      "{workspaceRoot}/nx.json"
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/.node-version",
+      "{workspaceRoot}/tsconfig.base.json",
+      "{workspaceRoot}/tsconfig.json",
+      "{workspaceRoot}/packages/**/*"
     ]
   },
   "targetDefaults": {
