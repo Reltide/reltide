@@ -1,0 +1,20 @@
+---
+title: API Sync
+description: The developer guide for Reltide's invited pilot.
+---
+
+Reltide is being built to connect official API changes to affected code and
+prepare verified migration drafts for human review.
+
+## Pilot scope
+
+The invited pilot targets GitHub repositories with TypeScript applications.
+Stripe is the first end-to-end migration fixture; OpenAI is in the MVP provider
+scope. Customer onboarding, run controls, and production deployment are not yet
+available.
+
+## Verification principle
+
+Every proposed migration needs an immutable base commit, a passing baseline,
+provider evidence, and independent verification in a fresh checkout. A human
+reviews the resulting draft pull request and chooses whether to merge it.
