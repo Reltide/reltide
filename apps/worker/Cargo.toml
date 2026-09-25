@@ -1,0 +1,9 @@
+[package]
+name = "reltide-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+reltide-domain = { path = "../../crates/domain" }

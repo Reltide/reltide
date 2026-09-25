@@ -36,6 +36,14 @@
       "{workspaceRoot}/tsconfig.base.json",
       "{workspaceRoot}/tsconfig.json",
       "{workspaceRoot}/packages/**/*"
+    ],
+    "rustGlobals": [
+      "{workspaceRoot}/Cargo.toml",
+      "{workspaceRoot}/Cargo.lock",
+      "{workspaceRoot}/rust-toolchain.toml",
+      "{workspaceRoot}/.cargo/**/*",
+      "{workspaceRoot}/nx.json",
+      { "runtime": "rustc --version" }
     ]
   },
   "targetDefaults": {

@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "nx run-many -t build -p app web docs",
+    "build": "nx run-many -t build -p app web docs reltide-api reltide-worker",
     "typecheck": "nx run-many -t typecheck -p app web docs",
     "check": "ultracite check",
-    "fix": "ultracite fix"
+    "fix": "ultracite fix",
+    "test:rust-graph": "node --test tools/rust-workspace.test.mjs",
+    "rust:check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked && node --test tools/rust-workspace.test.mjs"
   },
   "dependencies": {
     "@swc/helpers": "0.5.23"
