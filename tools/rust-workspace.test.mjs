@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { test } from "node:test";
+import { test } from "vitest";
 
 const workspaceRoot = path.resolve(import.meta.dirname, "..");
 const nx = path.resolve(workspaceRoot, "node_modules/.bin/nx");
