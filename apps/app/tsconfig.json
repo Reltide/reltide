@@ -27,6 +27,7 @@
     "app/**/*.tsx",
     "app/**/*.js",
     "app/**/*.jsx",
+    "lib/**/*.ts",
     "../../apps/app/.next/types/**/*.ts",
     "../../dist/apps/app/.next/types/**/*.ts",
     "index.d.ts",
