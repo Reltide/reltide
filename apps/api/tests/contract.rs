@@ -41,6 +41,10 @@ async fn health_response_and_served_contract_share_the_router()
     let served: Value = serde_json::from_slice(&body)?;
     assert_eq!(served, serde_json::to_value(document)?);
     assert_eq!(served["info"]["title"], "Reltide API");
+    assert_eq!(
+        served["paths"]["/api/v1/health"]["get"]["responses"]["200"]["description"],
+        "Process is healthy"
+    );
     assert!(
         served
             .pointer("/paths/~1api~1v1~1health/get/responses/200/content/application~1json/schema")

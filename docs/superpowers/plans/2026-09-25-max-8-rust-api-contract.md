@@ -56,7 +56,7 @@
 
 **Interfaces:** Produces public api() returning (axum::Router, utoipa::openapi::OpenApi). The binary prints the OpenAPI object for --print-openapi and otherwise serves the router.
 
-- [x] **Step 1: Add test dependencies and write failing router and CLI tests.** Add axum, tower, and serde_json dependencies so the tests compile; update Cargo.lock. In apps/api/tests/contract.rs, use tower::ServiceExt to send GET /api/v1/health and GET /openapi.json to api(). Assert status 200, JSON content type, and the literal object {"status":"ok"}. Parse the served contract and the --print-openapi output as JSON; assert that paths./api/v1/health.get.responses.200 exists and the two documents match. The CLI test uses the Cargo binary path and verifies stdout contains only JSON.
+- [x] **Step 1: Add test dependencies and write failing router and CLI tests.** Add axum, tower, and serde_json dependencies so the tests compile; update Cargo.lock. In apps/api/tests/contract.rs, use tower::ServiceExt to send GET /api/v1/health and GET /openapi.json to api(). Assert status 200, JSON content type, and the literal object {"status":"ok"}. Parse the served contract and the --print-openapi output as JSON; assert that paths./api/v1/health.get.responses.200 includes the required description and the two documents match. The CLI test uses the Cargo binary path and verifies stdout contains only JSON.
 
 ~~~rust
 let (router, _) = reltide_api::api();
@@ -75,7 +75,7 @@ assert_eq!(serde_json::from_slice::<Value>(&body)?, json!({"status": "ok"}));
 struct HealthResponse { status: &'static str }
 
 #[utoipa::path(get, path = "/api/v1/health", operation_id = "getHealth",
-    responses((status = 200, body = HealthResponse)))]
+    responses((status = 200, description = "Process is healthy", body = HealthResponse)))]
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }

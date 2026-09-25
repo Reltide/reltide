@@ -18,6 +18,9 @@ export type GetHealthData = {
 };
 
 export type GetHealthResponses = {
+    /**
+     * Process is healthy
+     */
     200: HealthResponse;
 };
 

@@ -21,7 +21,7 @@ enum HealthStatus {
     get,
     path = "/api/v1/health",
     operation_id = "getHealth",
-    responses((status = 200, body = HealthResponse))
+    responses((status = 200, description = "Process is healthy", body = HealthResponse))
 )]
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {

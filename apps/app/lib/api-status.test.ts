@@ -54,10 +54,16 @@ test("HTTP errors and unexpected success bodies are unavailable", async () => {
   }
 });
 
-test("invalid and unreachable API URLs are unavailable", async () => {
+test("invalid API URLs are unavailable", async () => {
   await Promise.all(
-    [":::bad", "file:///etc/passwd", "http://127.0.0.1:1"].map(async (url) => {
+    [":::bad", "file:///etc/passwd"].map(async (url) => {
       assert.deepEqual(await getApiStatus(url), { kind: "unavailable" });
     })
   );
+});
+
+test("a refused local connection is unavailable", async () => {
+  const server = await startServer(200, { status: "ok" });
+  await server.close();
+  assert.deepEqual(await getApiStatus(server.url), { kind: "unavailable" });
 });
