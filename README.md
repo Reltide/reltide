@@ -18,7 +18,11 @@ pnpm check
 
 Start one shell with `pnpm nx run app:dev`, `pnpm nx run web:dev`, or `pnpm nx run docs:dev`. They listen on ports 3000, 3001, and 3004. These initial frontend shells build without credentials or hosted services. They do not yet connect to repositories or run migrations.
 
-The layout keeps next-forge's `apps/` and `packages/` split and selected shared design-system assets. It was adapted from [next-forge commit `f189de7`](https://github.com/haydenbleasel/next-forge/tree/f189de79ceef7c1ef69f61f12e272f99b4cdb699) under its [MIT license](LICENSE.next-forge.md). The three Next.js app shells were generated with `@nx/next` 23.2.1; Nx replaces Turborepo. The upstream Mintlify docs were replaced with a Fumadocs shell, and the Next.js backend integrations were removed for the planned Rust backend.
+The layout keeps next-forge's `apps/` and `packages/` split. It was adapted from [next-forge commit `f189de7`](https://github.com/haydenbleasel/next-forge/tree/f189de79ceef7c1ef69f61f12e272f99b4cdb699) under its [MIT license](LICENSE.next-forge.md). The three Next.js app shells were generated with `@nx/next` 23.2.1; Nx replaces Turborepo. The upstream Mintlify docs were replaced with a Fumadocs shell, and the Next.js backend integrations were removed for the planned Rust backend.
+
+## Design system
+
+The MVP follows [Vercel's Geist Design System](https://vercel.com/geist/introduction) for typography, color roles, spacing, and component behavior. All three shells load Geist Sans and Geist Mono from the pinned public `geist` package. The shared `@repo/design-system` package owns the UI tokens and components; its Button is for actions and ButtonLink is for navigation. The colors and components are local implementations informed by Geist's public guidelines, not imports from a Vercel component package. This choice does not change the Verda hosting target.
 
 All product backend and worker code belongs in Rust. Platform compute targets Verda in Finland, with Neon EU for application PostgreSQL and Cloudflare R2 EU jurisdiction for private artifacts. `AGENTS.md` records the boundaries and development commands.
 

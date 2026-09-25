@@ -1,4 +1,4 @@
-import { Button } from "@repo/design-system/components/ui/button";
+import { ButtonLink } from "@repo/design-system/components/ui/button";
 
 const Home = () => (
   <main className="mx-auto min-h-screen max-w-6xl px-6 py-10">
@@ -18,9 +18,7 @@ const Home = () => (
         migration drafts for engineers to review.
       </p>
       <div>
-        <Button asChild>
-          <a href="#workflow">See the planned workflow</a>
-        </Button>
+        <ButtonLink href="#workflow">See the planned workflow</ButtonLink>
       </div>
     </section>
     <section id="workflow" className="grid gap-4 border-t py-12 md:grid-cols-3">

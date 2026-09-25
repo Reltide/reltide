@@ -58,7 +58,7 @@ no API key, $0).
 ## Tooling entry points
 
 - Start with Graft for repo context as described above. Use the `nx-workspace`, `nx-generate`, and `nx-run-tasks` skills for Nx discovery, scaffolding, and task execution.
-- Use `vercel:nextjs` and `vercel:next-forge` for frontend guidance, while keeping the Rust and Verda boundaries above. Use current official Fumadocs documentation for `apps/docs`.
+- Use `vercel:nextjs`, `vercel:next-forge`, and `vercel:geist` for frontend guidance, while keeping the Rust and Verda boundaries above. The MVP follows Geist's public design guidelines with local `@repo/design-system` components and the public `geist` font package. Use current official Fumadocs documentation for `apps/docs`.
 - Use `rust-best-practices`, `temporal:temporal-developer`, `verda-cloud`, `neon-postgres:neon-postgres`, and `cloudflare:cloudflare` for their respective implementation areas. Use `ultracite` for frontend quality configuration.
 - Use the connected Linear tools for issue context and status. Check official documentation and current stable releases before changing dependencies or provisioning. Pin deploy image versions or digests and follow Temporal's supported schema and replay upgrade sequence.
 - TypeScript 5.9.3 is temporarily pinned because Nx 23.2.1's generator fails with TypeScript 7.0.2 (`ts.readConfigFile is not a function`). Revisit this compatibility on Nx upgrades; do not silently freeze it indefinitely.
