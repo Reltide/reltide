@@ -44,8 +44,16 @@ test("a domain change affects both Rust services and the generated client", () =
   }
 });
 
-test("root Cargo and toolchain changes affect Rust projects and the generated client", () => {
-  for (const file of ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]) {
+test("root Cargo, toolchain, and Rust tool config changes affect the Rust graph", () => {
+  for (const file of [
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "rustfmt.toml",
+    ".rustfmt.toml",
+    "clippy.toml",
+    ".clippy.toml",
+  ]) {
     const affected = affectedBy(file);
 
     for (const project of ["reltide-domain", "reltide-api", "reltide-worker", "@repo/api-client"]) {

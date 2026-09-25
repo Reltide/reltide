@@ -33,7 +33,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-Nx records both Rust binaries' dependencies on `reltide-domain`. `packages/api-client/project.json` reserves the generated client's dependency on `reltide-api`; MAX-8 will add its package and generation target. Root Cargo manifests, lockfile, toolchain, and shared Rust configuration are inputs to Rust checks, while source changes flow through the project graph. Rust builds are not Nx cached because Cargo writes binaries into a shared `target/` directory; format, Clippy, and test results are cached without those artifacts. Resource provisioning and live-service operations have no reusable Nx targets.
+Nx records both Rust binaries' dependencies on `reltide-domain`. `packages/api-client/project.json` reserves the generated client's dependency on `reltide-api`; MAX-8 will add its package and generation target. Root Cargo manifests, lockfile, toolchain, and shared Rust configuration are affected-project inputs, while source changes flow through the project graph. Rust build, format, Clippy, and test targets run fresh because Cargo uses a shared `target/` directory and future checks may read environment-specific settings. Cargo still reuses local compilation artifacts. Resource provisioning and live-service operations have no reusable Nx targets.
 
 ## Design system
 

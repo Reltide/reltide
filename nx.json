@@ -41,6 +41,10 @@
       "{workspaceRoot}/Cargo.toml",
       "{workspaceRoot}/Cargo.lock",
       "{workspaceRoot}/rust-toolchain.toml",
+      "{workspaceRoot}/rustfmt.toml",
+      "{workspaceRoot}/.rustfmt.toml",
+      "{workspaceRoot}/clippy.toml",
+      "{workspaceRoot}/.clippy.toml",
       "{workspaceRoot}/.cargo/**/*",
       "{workspaceRoot}/nx.json",
       { "runtime": "rustc --version" }

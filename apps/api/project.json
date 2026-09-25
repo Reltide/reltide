@@ -23,8 +23,7 @@
         "cwd": "{workspaceRoot}"
       },
       "inputs": ["default", "^default"],
-      "outputs": [],
-      "cache": true
+      "cache": false
     },
     "clippy": {
       "executor": "nx:run-commands",
@@ -33,8 +32,7 @@
         "cwd": "{workspaceRoot}"
       },
       "inputs": ["default", "^default"],
-      "outputs": [],
-      "cache": true
+      "cache": false
     },
     "test": {
       "executor": "nx:run-commands",
@@ -43,8 +41,7 @@
         "cwd": "{workspaceRoot}"
       },
       "inputs": ["default", "^default"],
-      "outputs": [],
-      "cache": true
+      "cache": false
     }
   }
 }
