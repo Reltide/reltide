@@ -10,6 +10,7 @@
     "fix": "ultracite fix",
     "test:rust-graph": "vitest run tools/rust-workspace.test.mjs",
     "test:api-contract": "vitest run tools/api-client.test.mjs apps/app/lib/api-status.test.ts tools/rust-workspace.test.mjs",
+    "test:pr-title": "vitest run tools/pr-title.test.mjs",
     "rust:check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked && pnpm test:rust-graph",
     "prepare": "husky"
   },
