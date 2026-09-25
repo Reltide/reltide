@@ -4,5 +4,8 @@
   "private": true,
   "exports": {
     "./nextjs.json": "./nextjs.json"
+  },
+  "scripts": {
+    "check": "oxfmt --check ."
   }
 }

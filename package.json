@@ -9,23 +9,32 @@
     "check": "ultracite check",
     "fix": "ultracite fix",
     "test:rust-graph": "vitest run tools/rust-workspace.test.mjs",
-    "rust:check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked && pnpm test:rust-graph"
+    "rust:check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked && pnpm test:rust-graph",
+    "prepare": "husky"
   },
   "dependencies": {
     "@swc/helpers": "0.5.23"
   },
   "devDependencies": {
+    "@commitlint/cli": "21.2.3",
+    "@commitlint/config-conventional": "21.2.3",
+    "@commitlint/types": "21.2.3",
     "@nx/next": "23.2.1",
     "@swc-node/register": "1.12.1",
     "@swc/cli": "0.8.1",
     "@swc/core": "1.16.2",
     "@types/node": "26.6.2",
+    "husky": "9.1.7",
+    "lint-staged": "17.5.1",
     "nx": "23.2.1",
     "oxfmt": "0.70.0",
     "oxlint": "1.85.0",
     "typescript": "5.9.3",
     "ultracite": "7.12.0",
     "vitest": "4.1.11"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts,json,jsonc,css,scss,md,mdx,yaml,yml}": "pnpm exec ultracite fix"
   },
   "engines": {
     "node": ">=24 <27"

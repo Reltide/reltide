@@ -1,8 +1,14 @@
-import { source } from "../../../lib/source";
-import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/layouts/docs/page";
+import {
+  DocsBody,
+  DocsDescription,
+  DocsPage,
+  DocsTitle,
+} from "fumadocs-ui/layouts/docs/page";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+
+import { source } from "../../../lib/source";
 
 interface Props {
   params: Promise<{ slug?: string[] }>;
@@ -19,7 +25,9 @@ const Page = async ({ params }: Props) => {
   return (
     <DocsPage toc={page.data.toc}>
       <DocsTitle>{page.data.title}</DocsTitle>
-      {page.data.description && <DocsDescription>{page.data.description}</DocsDescription>}
+      {page.data.description && (
+        <DocsDescription>{page.data.description}</DocsDescription>
+      )}
       <DocsBody>
         <MdxContent components={defaultMdxComponents} />
       </DocsBody>
@@ -29,7 +37,9 @@ const Page = async ({ params }: Props) => {
 
 export const generateStaticParams = () => source.generateParams();
 
-export const generateMetadata = async ({ params }: Props): Promise<Metadata> => {
+export const generateMetadata = async ({
+  params,
+}: Props): Promise<Metadata> => {
   const { slug } = await params;
   const page = source.getPage(slug);
   if (!page) {

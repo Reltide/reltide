@@ -1,5 +1,6 @@
-import { config } from "@repo/next-config";
 import { fileURLToPath } from "node:url";
+
+import { config } from "@repo/next-config";
 
 export default {
   ...config,

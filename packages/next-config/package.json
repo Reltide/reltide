@@ -6,6 +6,9 @@
   "exports": {
     ".": "./index.mjs"
   },
+  "scripts": {
+    "check": "ultracite check ."
+  },
   "peerDependencies": {
     "next": "16.3.6"
   }

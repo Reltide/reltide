@@ -35,6 +35,8 @@
       "{workspaceRoot}/.node-version",
       "{workspaceRoot}/tsconfig.base.json",
       "{workspaceRoot}/tsconfig.json",
+      "{workspaceRoot}/oxlint.config.ts",
+      "{workspaceRoot}/oxfmt.config.ts",
       "{workspaceRoot}/packages/**/*"
     ],
     "rustGlobals": [
@@ -58,6 +60,10 @@
     },
     "typecheck": {
       "dependsOn": ["^typecheck"],
+      "inputs": ["default"],
+      "cache": true
+    },
+    "check": {
       "inputs": ["default"],
       "cache": true
     },
