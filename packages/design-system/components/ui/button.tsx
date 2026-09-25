@@ -11,17 +11,11 @@ const Button = ({
   asChild = false,
   ...props
 }: React.ComponentProps<"button"> & {
-    asChild?: boolean;
-  }) => {
+  asChild?: boolean;
+}) => {
   const Comp = asChild ? SlotPrimitive.Slot : "button";
 
-  return (
-    <Comp
-      data-slot="button"
-      className={cn(buttonClassName, className)}
-      {...props}
-    />
-  );
+  return <Comp data-slot="button" className={cn(buttonClassName, className)} {...props} />;
 };
 
 export { Button };
