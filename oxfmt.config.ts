@@ -12,6 +12,8 @@ export default defineConfig({
     "fixtures/**",
     "graft/**",
     "assets/**",
+    "packages/api-client/openapi.json",
+    "packages/api-client/src/generated/**",
     "opencode.json",
     "**/next-env.d.ts",
     "**/index.d.ts",

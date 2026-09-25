@@ -2,5 +2,32 @@
   "name": "@repo/api-client",
   "projectType": "library",
   "tags": ["scope:frontend", "type:generated-client"],
-  "implicitDependencies": ["reltide-api"]
+  "implicitDependencies": ["reltide-api"],
+  "targets": {
+    "generate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node packages/api-client/scripts/contract.mjs --generate",
+        "cwd": "{workspaceRoot}"
+      },
+      "cache": false
+    },
+    "check-contract": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node packages/api-client/scripts/contract.mjs --check",
+        "cwd": "{workspaceRoot}"
+      },
+      "cache": false
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node packages/api-client/scripts/contract.mjs --check && pnpm exec tsc --noEmit -p packages/api-client/tsconfig.json",
+        "cwd": "{workspaceRoot}"
+      },
+      "dependsOn": ["^build"],
+      "cache": false
+    }
+  }
 }

@@ -12,6 +12,7 @@ export default defineConfig({
     "**/.source/**",
     "**/node_modules/**",
     "**/dist/**",
+    "packages/api-client/src/generated/**",
     "**/next-env.d.ts",
     "**/index.d.ts",
     "fixtures/**",

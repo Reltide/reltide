@@ -36,6 +36,7 @@ test("Nx tracks the Cargo crate and generated client dependencies", () => {
     ["reltide-api", "reltide-domain"],
     ["reltide-worker", "reltide-domain"],
     ["@repo/api-client", "reltide-api"],
+    ["app", "@repo/api-client"],
   ]) {
     assert.ok(
       dependencies[source].some((dependency) => dependency.target === target),
@@ -53,6 +54,13 @@ test("a domain change affects both Rust services and the generated client", () =
     "reltide-worker",
     "@repo/api-client",
   ]) {
+    assert.ok(affected.has(project), `${project} should be affected`);
+  }
+});
+
+test("an API source change affects the client and dashboard", () => {
+  const affected = affectedBy("apps/api/src/lib.rs");
+  for (const project of ["reltide-api", "@repo/api-client", "app"]) {
     assert.ok(affected.has(project), `${project} should be affected`);
   }
 });

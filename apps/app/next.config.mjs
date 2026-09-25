@@ -5,4 +5,5 @@ import { config } from "@repo/next-config";
 export default {
   ...config,
   outputFileTracingRoot: fileURLToPath(new URL("../../", import.meta.url)),
+  transpilePackages: [...config.transpilePackages, "@repo/api-client"],
 };
