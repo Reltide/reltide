@@ -11,3 +11,6 @@ dist/
 # Next.js
 .next
 out
+
+# Rust-contract-derived documentation; regenerated before docs checks/builds.
+/apps/docs/content/docs/reference/generated/
