@@ -1,0 +1,66 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "enabledManagers": [
+    "npm",
+    "cargo",
+    "nodenv",
+    "rust-toolchain",
+    "dockerfile",
+    "docker-compose",
+    "github-actions",
+    "custom.regex"
+  ],
+  "automerge": false,
+  "ignoreUnstable": true,
+  "rangeStrategy": "pin",
+  "ignorePaths": [
+    "fixtures/**",
+    "**/node_modules/**",
+    "**/.next/**",
+    "target/**",
+    "graft/**"
+  ],
+  "dependencyDashboard": true,
+  "lockFileMaintenance": { "enabled": true },
+  "prBodyNotes": [
+    "Human review is required. Run the full Quality gates workflow on this commit before merging; dependency and toolchain inputs must select all platform projects.",
+    "Record compatibility failures in docs/maintenance.md and the dependency dashboard. Do not bypass checks or permanently suppress major updates."
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^Cargo\\.toml$/"],
+      "matchStrings": [
+        "rust-version\\s*=\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "depNameTemplate": "rust",
+      "datasourceTemplate": "rust-version",
+      "versioningTemplate": "semver"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchPackageNames": ["nx", "@nx/*"],
+      "groupName": "Nx"
+    },
+    {
+      "matchPackageNames": ["rust"],
+      "groupName": "Rust toolchain and workspace version"
+    },
+    {
+      "matchPackageNames": ["typescript"],
+      "prBodyNotes": [
+        "Compatibility blocker: Nx 23.2.1 generators fail with TypeScript 7.0.2 (ts.readConfigFile is not a function). Recheck generator compatibility in a disposable directory when upgrading Nx or TypeScript; the 5.9.3 pin is temporary."
+      ]
+    },
+    {
+      "matchDatasources": ["docker"],
+      "pinDigests": true
+    }
+  ]
+}

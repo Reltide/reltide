@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CI: "true"
+  HUSKY: "0"
+  NX_DAEMON: "false"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  frontend:
+    name: Frontend, docs, and affected coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          install: false
+      - run: rustup show active-toolchain
+      - run: pnpm install --frozen-lockfile
+      - name: Affected PR checks
+        if: github.event_name == 'pull_request'
+        env:
+          NX_BASE: ${{ github.event.pull_request.base.sha }}
+          NX_HEAD: ${{ github.sha }}
+        run: pnpm ci:affected
+      - name: Full frontend and documentation checks
+        if: github.event_name != 'pull_request'
+        run: pnpm ci:frontend
+
+  rust:
+    name: Rust (${{ matrix.configuration }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [default, no-default-features, all-features]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          install: false
+      - run: rustup show active-toolchain
+      - name: Format, Clippy, tests, and release build
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+        run: pnpm run "rust:ci:$CONFIGURATION"
+
+  configuration:
+    name: Dependency updater configuration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          install: false
+      - run: pnpm ci:config
+
+  quality-gates:
+    name: Quality gates
+    if: always()
+    needs: [frontend, rust, configuration]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every check to succeed
+        env:
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          CONFIGURATION_RESULT: ${{ needs.configuration.result }}
+        run: |
+          test "$FRONTEND_RESULT" = success
+          test "$RUST_RESULT" = success
+          test "$CONFIGURATION_RESULT" = success

@@ -37,9 +37,14 @@
       "{workspaceRoot}/tsconfig.json",
       "{workspaceRoot}/oxlint.config.ts",
       "{workspaceRoot}/oxfmt.config.ts",
+      "{workspaceRoot}/tools/**/*",
+      "{workspaceRoot}/.github/**/*",
+      "{workspaceRoot}/renovate.json",
+      "{workspaceRoot}/infra/**/*",
       "{workspaceRoot}/packages/**/*"
     ],
     "rustGlobals": [
+      "sharedGlobals",
       "{workspaceRoot}/Cargo.toml",
       "{workspaceRoot}/Cargo.lock",
       "{workspaceRoot}/rust-toolchain.toml",
