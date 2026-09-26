@@ -52,6 +52,14 @@ cargo test --workspace --locked
 
 Nx records both Rust binaries' dependencies on `reltide-domain`, the generated client's dependency on `reltide-api`, and the dashboard's dependency on `@repo/api-client`. Root Cargo manifests, lockfile, toolchain, and shared Rust configuration are affected-project inputs, while source changes flow through the project graph. Rust build, format, Clippy, and test targets run fresh because Cargo uses a shared `target/` directory and future checks may read environment-specific settings. The API client generation and drift targets also run fresh. Cargo still reuses local compilation artifacts. Resource provisioning and live-service operations have no reusable Nx targets.
 
+## Documentation
+
+`apps/docs` contains version-controlled Fumadocs guides and a Rust OpenAPI reference. Run `pnpm nx run docs:check-links` for internal route and heading validation, `pnpm nx run docs:build` to build, and `pnpm nx run docs:dev` for port 3004. Each prepares ignored reference MDX after checking the committed Rust contract. `pnpm test:docs` tests generation, invalid inputs, links, content loading, and the affected graph.
+
+`pnpm nx run docs:smoke` builds and verifies a standalone bundle copied into an isolated temporary directory. Package `apps/docs/.next/standalone`, copy `.next/static` into `apps/docs/.next/static` within that bundle, and copy any `public` assets into `apps/docs/public`. Run `PORT=3004 HOSTNAME=0.0.0.0 node apps/docs/server.js` from the bundle root on Verda. Documentation pages, API rendering, and local `/api/search` need no Rust process or hosted credentials. Production deployment is separate work.
+
+The staged hook formats `.mdx` with Oxfmt; Fumadocs compilation and link validation provide correctness checks. Intentionally ignored design Markdown is excluded from the Ultracite staged glob.
+
 ## Design system
 
 The MVP follows [Vercel's Geist Design System](https://vercel.com/geist/introduction) for typography, color roles, spacing, and component behavior. All three shells load Geist Sans and Geist Mono from the pinned public `geist` package. The shared `@repo/design-system` package owns the UI tokens and components; its Button is for actions and ButtonLink is for navigation. The colors and components are local implementations informed by Geist's public guidelines, not imports from a Vercel component package. This choice does not change the Verda hosting target.

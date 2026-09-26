@@ -1,3 +1,4 @@
 @import "@repo/design-system/styles/globals.css";
 @import "fumadocs-ui/css/shadcn.css";
 @import "fumadocs-ui/css/preset.css";
+@import "fumadocs-openapi/css/preset.css";

@@ -10,6 +10,7 @@
     "fix": "ultracite fix",
     "test:rust-graph": "vitest run tools/rust-workspace.test.mjs",
     "test:api-contract": "vitest run tools/api-client.test.mjs apps/app/lib/api-status.test.ts tools/rust-workspace.test.mjs",
+    "test:docs": "vitest run tools/docs.test.mjs",
     "rust:check": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked && pnpm test:rust-graph",
     "prepare": "husky"
   },
@@ -35,7 +36,8 @@
     "vitest": "4.1.11"
   },
   "lint-staged": {
-    "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts,json,jsonc,css,scss,md,mdx,yaml,yml}": "pnpm exec ultracite fix"
+    "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts,json,jsonc,css,scss,yaml,yml}": "pnpm exec ultracite fix",
+    "*.mdx": "pnpm exec oxfmt"
   },
   "engines": {
     "node": ">=24 <27"

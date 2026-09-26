@@ -1,0 +1,16 @@
+---
+title: Repository permissions
+description: The planned selected-repository GitHub App model.
+---
+
+## Planned installation model
+
+The invited pilot is intended to use a GitHub App installed only on repositories selected by an authorized owner or administrator. The current shell has no installation or connection flow.
+
+The future integration needs repository metadata and source access to identify the base commit, inspect dependencies, and verify a patch. Creating a branch and draft pull request needs corresponding write permissions. Exact App scopes, webhook events, and credential handling must be reviewed when that integration is implemented; this page does not represent a permission grant.
+
+## Repository control
+
+A migration is scoped to an authorized repository and immutable base commit. Required checks and protected settings are preserved. The service must not weaken verification or security settings to make a patch pass.
+
+Only a human approves and merges a draft. Installing the future App will not authorize automatic merging. See [verification](/docs/verification) and [review limits](/docs/review-limits).

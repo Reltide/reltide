@@ -1,0 +1,14 @@
+---
+title: API reference
+description: Generated from the Rust router's committed OpenAPI contract.
+---
+
+## Current contract
+
+The current Rust API documents one operation: [GET /api/v1/health](/docs/reference/generated/getHealth). It returns process health, not dependency or provider readiness.
+
+The Rust router exports the same OpenAPI document it serves at `/openapi.json`. That export generates `packages/api-client/openapi.json` and the TypeScript client; this site generates endpoint pages from the committed JSON. Contract drift fails preparation before building.
+
+The reference and local search work without a running Rust server. The API playground is disabled; these pages do not send authenticated platform requests or expose credentials.
+
+See [local setup](/docs/local-setup#documentation-and-contract-checks) for generation and validation.

@@ -1,0 +1,20 @@
+---
+title: Review limits
+description: Human approval and the limits of checks and reverts.
+---
+
+## Review and merge
+
+Every migration PR is a draft for a human to review and merge. The planned service does not automatically merge changes. Reviewers must confirm evidence, version scope, application behavior, and verification results in their repository.
+
+Checks cover only the behavior they exercise. A successful build, test suite, or health endpoint cannot establish compatibility for untested production paths or external provider behavior. Missing evidence and incomplete verification hold a patch for review.
+
+## Protected settings
+
+Required checks, branch protection, and security controls are preserved. A failing migration must be corrected or held for review; changing those controls to make it pass is outside the workflow.
+
+## Revert boundaries
+
+A requested revert can propose a repository patch for human review. It cannot undo external side effects, reverse data already sent to a provider, or restore an API version that the provider retired. Operational recovery and data restoration need their own assessment.
+
+See [product scope](/docs/product-scope) and [verification](/docs/verification).

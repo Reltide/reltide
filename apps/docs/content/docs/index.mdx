@@ -1,13 +1,18 @@
 ---
-title: API Sync
-description: The developer guide for Reltide's invited pilot.
+title: Reltide
+description: Product scope, developer setup, and the Rust API contract.
 ---
 
-Reltide is being built to connect official API changes to affected code and prepare verified migration drafts for human review.
+Reltide is being built to identify external API changes and prepare verified draft pull requests for engineers to review. The repository currently provides frontend shells, a Rust health API, and a generated TypeScript client. Repository onboarding and migration execution are planned.
 
-## Pilot scope
+## Start here
 
-The invited pilot targets GitHub repositories with TypeScript applications. Stripe is the first end-to-end migration fixture; OpenAI is in the MVP provider scope. Customer onboarding, run controls, and production deployment are not yet available.
+- [Product scope](/docs/product-scope): the invited pilot and what exists today.
+- [Local setup](/docs/local-setup): toolchains, commands, and local ports.
+- [Repository permissions](/docs/repository-permissions): the planned GitHub integration.
+- [Verification](/docs/verification): evidence and checks required before a draft PR.
+- [Review limits](/docs/review-limits): human review and the limits of a revert.
+- [API reference](/docs/reference): documentation generated from the Rust contract.
 
 ## Verification principle
 

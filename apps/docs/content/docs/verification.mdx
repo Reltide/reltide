@@ -1,0 +1,27 @@
+---
+title: Verification
+description: Planned evidence and independent checks required for a migration draft.
+---
+
+## Draft gate
+
+The migration workflow is planned. Before publishing a draft PR, it must:
+
+1. Record the authorized repository, immutable base commit, dependency versions, and API-version scope.
+2. Establish that baseline checks pass on the unchanged checkout.
+3. Gather official provider evidence relevant to the requested version transition and affected code.
+4. Apply the patch in a fresh disposable checkout.
+5. Run required repository checks and independent checks of the changed behavior.
+6. Include evidence, change scope, check results, and remaining review limits with the draft.
+
+A failed baseline, ambiguous scope, unsupported claim, or incomplete independent checks holds the patch for review. Protected CI and security settings are preserved.
+
+## Foundation checks today
+
+The repository verifies builds, TypeScript, frontend quality, Rust, and consistency between Rust OpenAPI and the generated client. The documentation build also checks internal links and derives its reference from that committed contract.
+
+`GET /api/v1/health` reports process availability. It does not verify database connectivity, provider readiness, or migration correctness. Those capabilities are not implied by [the reference](/docs/reference).
+
+## Human review
+
+Passing checks provides evidence for a reviewer. A human still reviews code, the API-version transition, repository-specific behavior, and risks outside the checks' coverage before merging. Read [review limits](/docs/review-limits).
