@@ -44,7 +44,7 @@ no API key, $0).
 
 - The first milestone is an evidence-backed Stripe migration draft PR for a controlled TypeScript GitHub repository. The invited MVP also covers OpenAI; a human reviews and merges every PR.
 - Next.js in `apps/app`, `apps/web`, and `apps/docs` renders UI and documentation. Business logic, authentication, authorization, GitHub webhooks, persistence, orchestration, and workers belong in Rust. Do not add a second application backend or database access in Next.js. The docs search route is a documentation index only.
-- Platform compute, self-hosted Temporal, its PostgreSQL, and disposable execution environments target Verda in Finland. The application database targets Neon EU and private artifacts target Cloudflare R2 EU jurisdiction. External GitHub, provider sources, AI inference, and Resend remain integrations. Do not substitute Vercel hosting, Temporal Cloud, or a managed authentication backend.
+- Platform compute, self-hosted Temporal, its PostgreSQL, and disposable execution environments target Hetzner Cloud in Finland (`hel1`). Servers have already been purchased; inspect the authenticated inventory before choosing service placement or creating additional resources. The application database targets Neon EU and private artifacts target Cloudflare R2 EU jurisdiction. External GitHub, provider sources, AI inference, and Resend remain integrations. Do not substitute Vercel hosting, Temporal Cloud, or a managed authentication backend.
 - Do not weaken verification, alter protected CI/security settings to make a migration pass, or publish a PR when the baseline, evidence, version scope, or independent checks are incomplete.
 
 ## Repository commands
@@ -58,7 +58,7 @@ no API key, $0).
 ## Tooling entry points
 
 - Start with Graft for repo context as described above. Use the `nx-workspace`, `nx-generate`, and `nx-run-tasks` skills for Nx discovery, scaffolding, and task execution.
-- Use `vercel:nextjs`, `vercel:next-forge`, and `vercel:geist` for frontend guidance, while keeping the Rust and Verda boundaries above. The MVP follows Geist's public design guidelines with local `@repo/design-system` components and the public `geist` font package. Use current official Fumadocs documentation for `apps/docs`.
-- Use `rust-best-practices`, `temporal:temporal-developer`, `verda-cloud`, `neon-postgres:neon-postgres`, and `cloudflare:cloudflare` for their respective implementation areas. Use `ultracite` for frontend quality configuration.
+- Use `vercel:nextjs`, `vercel:next-forge`, and `vercel:geist` for frontend guidance, while keeping the Rust and Hetzner boundaries above. The MVP follows Geist's public design guidelines with local `@repo/design-system` components and the public `geist` font package. Use current official Fumadocs documentation for `apps/docs`.
+- Use `rust-best-practices`, `temporal:temporal-developer`, `neon-postgres:neon-postgres`, and `cloudflare:cloudflare` for their respective implementation areas. Use the official Hetzner `hcloud` CLI and documentation for inventory and authorized infrastructure operations. Use `ultracite` for frontend quality configuration.
 - Use the connected Linear tools for issue context and status. Check official documentation and current stable releases before changing dependencies or provisioning. Pin deploy image versions or digests and follow Temporal's supported schema and replay upgrade sequence.
 - TypeScript 5.9.3 is temporarily pinned because Nx 23.2.1's generator fails with TypeScript 7.0.2 (`ts.readConfigFile is not a function`). Revisit this compatibility on Nx upgrades; do not silently freeze it indefinitely.

@@ -52,6 +52,6 @@ After changing a Rust operation or schema, run `pnpm nx run @repo/api-client:gen
 
 ## Standalone output
 
-The docs build produces `.next/standalone` for deployment on Verda. Package that directory with `.next/static` copied to `apps/docs/.next/static` and any `public` assets copied to `apps/docs/public` inside the bundle. Run `node apps/docs/server.js` from the bundle root with `PORT=3004` and the desired `HOSTNAME`.
+The docs build produces `.next/standalone` for deployment on Hetzner Cloud in Finland. Package that directory with `.next/static` copied to `apps/docs/.next/static` and any `public` assets copied to `apps/docs/public` inside the bundle. Run `node apps/docs/server.js` from the bundle root with `PORT=3004` and the desired `HOSTNAME`.
 
 The smoke target builds, copies only this output into a temporary directory, starts it locally, and checks pages, API rendering, 404 behavior, and search. It requires no hosted credentials or live API. Production service configuration and deployment are separate work.

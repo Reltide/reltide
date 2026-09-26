@@ -4,6 +4,8 @@
 
 **Design approved in conversation:** 25 September 2026
 
+**Hosting update — 26 September 2026:** Hetzner Cloud in Finland replaces the Verda target in this approved design. Standalone packaging and the implementation scope remain applicable. See [the current pilot deployment decision](../../decisions/pilot-budget.md).
+
 ## Outcome and scope
 
 A clean checkout builds version-controlled product and developer documentation in `apps/docs`. The site uses the existing shared design tokens and Geist fonts, serves search locally, and renders an API reference from the same Rust OpenAPI contract that generates the TypeScript client. Documentation build and validation are Nx targets, and the resulting Next.js standalone output can run on Verda without a documentation SaaS or a live Rust API process.

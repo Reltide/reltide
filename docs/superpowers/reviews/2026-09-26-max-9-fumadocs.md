@@ -1,5 +1,7 @@
 # MAX-9 implementation and review evidence
 
+**Hosting update — 26 September 2026:** Hetzner Cloud in Finland replaces the Verda target recorded in this review. The verification evidence below is historical; production deployment remains separate work. See [the current pilot deployment decision](../../decisions/pilot-budget.md).
+
 ## Result
 
 Fumadocs guides, generated Rust API reference, local search, Nx contract/link gates, and standalone packaging are implemented. The site is intended for Verda; production deployment and required CI wiring are subsequent work.
