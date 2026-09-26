@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -18,12 +18,31 @@ import { afterEach, test } from "vitest";
 
 const { dirname, join } = path;
 const root = fileURLToPath(new URL("..", import.meta.url));
+const nx = join(root, "node_modules/nx/dist/bin/nx.js");
 const fixtures = [];
 
 afterEach(() => {
   for (const fixture of fixtures.splice(0)) {
     rmSync(fixture, { force: true, recursive: true });
   }
+});
+
+test.each([
+  "apps/api/src/lib.rs",
+  "crates/domain/src/lib.rs",
+  "packages/api-client/openapi.json",
+  "Cargo.lock",
+  "rust-toolchain.toml",
+  "pnpm-lock.yaml",
+])("marks docs affected by %s", (file) => {
+  const projects = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [nx, "show", "projects", "--affected", `--files=${file}`, "--json"],
+      { cwd: root, encoding: "utf-8" }
+    )
+  );
+  assert.ok(projects.includes("docs"), `${file}: ${projects.join(", ")}`);
 });
 
 const fixture = (copyContent = false) => {

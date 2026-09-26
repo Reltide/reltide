@@ -86,6 +86,16 @@
         "options": {
           "command": "pnpm test:docs"
         }
+      },
+      "smoke": {
+        "executor": "nx:run-commands",
+        "cache": false,
+        "dependsOn": [
+          "build"
+        ],
+        "options": {
+          "command": "node tools/docs-standalone.mjs"
+        }
       }
     }
   }
