@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { register } from "fumadocs-mdx/node";
 import { printErrors, scanURLs, validateFiles } from "next-validate-link";
 
@@ -20,6 +22,9 @@ const files = await Promise.all(
     path: page.absolutePath,
     url: page.url,
   }))
+);
+const urlsByPath = new Map(
+  files.map((file) => [path.resolve(file.path), file.url])
 );
 const results = await Promise.all(
   files.map((file) =>
@@ -45,16 +50,23 @@ const results = await Promise.all(
               )
               .map((attribute) => attribute.value);
           }
-          // next-validate-link skips hash-only URLs; resolve them explicitly.
+          // The validator skips URLs with no pathname; resolve their page first.
           return {
             hrefs: hrefs.map((href) =>
-              href.startsWith("#") ? `${file.url}${href}` : href
+              href.startsWith("#") || href.startsWith("?")
+                ? `${file.url}${href}`
+                : href
             ),
           };
         },
       },
-      pathToUrl: (filePath) =>
-        files.find((item) => item.path === filePath)?.url,
+      pathToUrl(filePath) {
+        const url = urlsByPath.get(path.resolve(filePath));
+        if (!url) {
+          throw new Error(`No documentation route for ${filePath}`);
+        }
+        return url;
+      },
       scanned,
     })
   )

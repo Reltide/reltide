@@ -185,3 +185,19 @@ test("validates routes and heading fragments", () => {
   assert.notEqual(samePage.status, 0);
   assert.match(samePage.stdout + samePage.stderr, /missing-heading/u);
 });
+
+test.each([
+  ["relative document", "./missing.mdx", "./index.mdx#real-heading"],
+  ["query-only fragment", "?foo=bar#missing-heading", "?foo=bar#real-heading"],
+])("rejects broken %s links", (_kind, invalid, valid) => {
+  const { docs } = fixture();
+  assertSuccess(run(docs, "prepare-content.mjs"));
+  const index = join(docs, "content/docs/index.mdx");
+  const original = readFileSync(index, "utf-8");
+  writeFileSync(index, `${original}\n[Valid control](${valid})\n`);
+  assertSuccess(run(docs, "check-links.mjs"));
+  writeFileSync(index, `${original}\n[Broken link](${invalid})\n`);
+  const result = run(docs, "check-links.mjs");
+  assert.notEqual(result.status, 0, invalid);
+  assert.ok((result.stdout + result.stderr).includes(invalid));
+});
