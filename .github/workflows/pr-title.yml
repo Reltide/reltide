@@ -23,4 +23,4 @@ jobs:
       - name: Lint PR title
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
-        run: printf '%s\n' "$PR_TITLE" | pnpm exec commitlint --config commitlint.pr-title.config.ts
+        run: printf '%s\n' "$PR_TITLE" | pnpm exec commitlint
