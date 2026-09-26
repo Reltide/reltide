@@ -1,0 +1,57 @@
+---
+title: Local setup
+description: Run the foundation and documentation without hosted credentials.
+---
+
+## Toolchains and installation
+
+Use Node **26.9.0**, pnpm **12.6.0**, and Rust **1.98.1**, pinned in `.node-version`, `package.json`, and `rust-toolchain.toml`. Rust requires `rustfmt` and `clippy`. TypeScript is temporarily pinned to 5.9.3 for compatibility with the Nx 23.2.1 generator; revisit that pin when upgrading Nx.
+
+From a clean checkout:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm nx show projects --json
+pnpm build
+pnpm typecheck
+pnpm check
+pnpm rust:check
+```
+
+The checks use Ultracite with Oxlint and Oxfmt, separate TypeScript checking, and Cargo format, Clippy, and tests. The staged hook formats MDX with Oxfmt; compilation and link validation check its correctness.
+
+## Local processes
+
+| Process         | Command                             | Port |
+| --------------- | ----------------------------------- | ---- |
+| Dashboard       | `pnpm nx run app:dev`               | 3000 |
+| Website         | `pnpm nx run web:dev`               | 3001 |
+| Documentation   | `pnpm nx run docs:dev`              | 3004 |
+| Rust health API | `cargo run -p reltide-api --locked` | 3002 |
+
+The Rust API defaults to `127.0.0.1:3002`. Set `RELTIDE_API_BIND` to change its socket address. Start Rust separately to show health in the dashboard:
+
+```bash
+RELTIDE_API_BASE_URL=http://127.0.0.1:3002 pnpm nx run app:dev
+```
+
+That variable is server-only. With no API URL the dashboard reports “Not configured”. Documentation rendering and search do not need a Rust process.
+
+## Documentation and contract checks
+
+```bash
+pnpm nx run docs:check-links
+pnpm nx run docs:build
+pnpm test:docs
+pnpm nx run docs:smoke
+```
+
+Nx checks the committed API contract before generating reference MDX, then validates internal routes and heading fragments before building. Generated MDX is ignored by Git and recreated from the local schema; external websites are not fetched during link validation.
+
+After changing a Rust operation or schema, run `pnpm nx run @repo/api-client:generate` and commit both the OpenAPI JSON and generated client. `pnpm nx run @repo/api-client:check-contract` detects drift without editing the checkout. `pnpm test:api-contract` and `cargo test -p reltide-api --locked` verify the current contract.
+
+## Standalone output
+
+The docs build produces `.next/standalone` for deployment on Verda. Package that directory with `.next/static` copied to `apps/docs/.next/static` and any `public` assets copied to `apps/docs/public` inside the bundle. Run `node apps/docs/server.js` from the bundle root with `PORT=3004` and the desired `HOSTNAME`.
+
+The smoke target builds, copies only this output into a temporary directory, starts it locally, and checks pages, API rendering, 404 behavior, and search. It requires no hosted credentials or live API. Production service configuration and deployment are separate work.

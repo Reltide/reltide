@@ -26,7 +26,7 @@ afterEach(() => {
   }
 });
 
-const fixture = () => {
+const fixture = (copyContent = false) => {
   const directory = mkdtempSync(join(tmpdir(), "reltide-docs-"));
   fixtures.push(directory);
   const docs = join(directory, "apps/docs");
@@ -43,10 +43,17 @@ const fixture = () => {
   const schema = join(directory, "packages/api-client/openapi.json");
   mkdirSync(dirname(schema), { recursive: true });
   cpSync(join(root, "packages/api-client/openapi.json"), schema);
-  writeFileSync(
-    join(docs, "content/docs/index.mdx"),
-    "---\ntitle: Fixture\n---\n\n## Real heading\n\n[Valid](/docs#real-heading)\n"
-  );
+  if (copyContent) {
+    cpSync(join(root, "apps/docs/content/docs"), join(docs, "content/docs"), {
+      filter: (entry) => !entry.includes("/reference/generated"),
+      recursive: true,
+    });
+  } else {
+    writeFileSync(
+      join(docs, "content/docs/index.mdx"),
+      "---\ntitle: Fixture\n---\n\n## Real heading\n\n[Valid](/docs#real-heading)\n"
+    );
+  }
   return { docs, schema };
 };
 
@@ -83,6 +90,41 @@ test("generates health and removes stale operations", () => {
   writeFileSync(schema, JSON.stringify(document));
   assertSuccess(run(docs, "prepare-content.mjs"));
   assert.ok(!existsSync(join(output, "getOther.mdx")));
+});
+
+test("loads all guides and the searchable health reference from a clean copy", () => {
+  const { docs } = fixture(true);
+  assertSuccess(run(docs, "prepare-content.mjs"));
+  writeFileSync(
+    join(docs, "scripts/inspect-content.mjs"),
+    `import { register } from 'fumadocs-mdx/node';
+register();
+const { source } = await import('../lib/source.ts');
+console.log(JSON.stringify(source.getPages().map(page => ({
+  url: page.url, title: page.data.title, structuredData: page.data.structuredData
+}))));`
+  );
+  const result = run(docs, "inspect-content.mjs");
+  assertSuccess(result);
+  const pages = JSON.parse(result.stdout.trim().split("\n").at(-1));
+  for (const slug of [
+    "product-scope",
+    "local-setup",
+    "repository-permissions",
+    "verification",
+    "review-limits",
+    "reference",
+    "reference/generated/getHealth",
+  ]) {
+    assert.ok(
+      pages.some((page) => page.url === `/docs/${slug}`),
+      slug
+    );
+  }
+  const health = pages.find((page) => page.url.endsWith("/getHealth"));
+  assert.match(health.title, /health/iu);
+  assert.ok(health.structuredData);
+  assertSuccess(run(docs, "check-links.mjs"));
 });
 
 test("rejects missing and malformed schemas", () => {

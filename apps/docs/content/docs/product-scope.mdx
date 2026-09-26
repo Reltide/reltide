@@ -1,0 +1,24 @@
+---
+title: Product scope
+description: The invited pilot and the repository's current capabilities.
+---
+
+## Invited pilot
+
+The first milestone is an evidence-backed Stripe migration draft PR for a controlled TypeScript repository on GitHub. The invited MVP also includes OpenAI. A human reviews and merges every PR.
+
+The planned workflow connects selected repositories, establishes dependency and API-version scope, gathers official provider evidence, applies a patch in a disposable checkout, and runs independent verification. Incomplete scope, evidence, baseline, or checks hold a migration for review.
+
+## Available today
+
+The repository contains Next.js shells for the dashboard, website, and documentation; a Rust API with [process health](/docs/reference/generated/getHealth); a worker skeleton; and a TypeScript client generated from the Rust OpenAPI document. The local shells require no hosted credentials.
+
+Repository installation, provider monitoring, migration orchestration, and end-to-end draft PR creation remain planned. Building this foundation does not establish that those workflows are ready.
+
+## Platform boundaries
+
+Rust owns business logic, authentication, authorization, webhooks, persistence, orchestration, and workers. Next.js renders UI and documentation; its search route only serves the documentation index.
+
+Platform compute and self-hosted Temporal target Verda in Finland. The application database targets Neon EU, and private artifacts target Cloudflare R2 EU jurisdiction. GitHub, provider sources, AI inference, and Resend remain external integrations. This slice does not provision those services.
+
+Read [verification](/docs/verification) and [review limits](/docs/review-limits) before evaluating a future migration draft.
