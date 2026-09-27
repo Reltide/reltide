@@ -49,7 +49,7 @@ no API key, $0).
 
 ## Repository commands
 
-- Use Node `26.9.0` and pnpm `12.6.0`. Install with `pnpm install --frozen-lockfile` from a clean checkout. Versions are exact in manifests and resolved in `pnpm-lock.yaml`.
+- Use Node `26.10.0` and pnpm `12.6.0`. Install with `pnpm install --frozen-lockfile` from a clean checkout. Versions are exact in manifests and resolved in `pnpm-lock.yaml`.
 - Discover projects and targets with `pnpm nx show projects --json` and `pnpm nx show project <name> --json`. Run `pnpm build`, `pnpm typecheck`, and `pnpm check`; use `pnpm nx run <project>:<target>` for one project.
 - `apps/app` uses port 3000, `apps/web` uses 3001, and `apps/docs` uses 3004. The initial shells require no hosted service or credentials.
 - Frontend linting and formatting use Ultracite with Oxlint, its anti-slop preset, and Oxfmt. Type checking is separate. Do not add Biome, ESLint, Prettier, or Turborepo configurations. Rust checks, once the Cargo workspace exists, are `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `cargo test --workspace --locked`.

@@ -33,9 +33,9 @@
     "@swc-node/register": "1.12.1",
     "@swc/cli": "0.8.1",
     "@swc/core": "1.16.2",
-    "@types/node": "26.6.2",
+    "@types/node": "26.6.3",
     "husky": "9.1.7",
-    "lint-staged": "17.5.1",
+    "lint-staged": "17.6.0",
     "nx": "23.2.1",
     "oxfmt": "0.70.0",
     "oxlint": "1.85.0",
@@ -48,7 +48,7 @@
     "*.{json,jsonc,css,scss,yaml,yml,mdx}": "pnpm exec oxfmt"
   },
   "engines": {
-    "node": ">=24 <27"
+    "node": "v26.10.0"
   },
   "packageManager": "pnpm@12.6.0"
 }
