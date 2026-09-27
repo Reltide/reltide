@@ -1,6 +1,6 @@
 # MAX-11 — staging capacity and recovery design
 
-**Written 27 September 2026. Conversational design approved; written-spec review pending.**
+**Written and approved by the owner on 27 September 2026. Implementation-plan review and execution-method selection pending.**
 
 ## Purpose and decision
 
