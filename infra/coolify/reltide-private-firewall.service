@@ -1,0 +1,12 @@
+[Unit]
+Description=Restrict Reltide private host and Docker traffic
+Before=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/reltide-private-firewall
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

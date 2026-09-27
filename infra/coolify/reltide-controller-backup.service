@@ -1,0 +1,14 @@
+[Unit]
+Description=Encrypt and back up the Coolify controller to R2 EU
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/reltide-controller-backup
+TimeoutStartSec=15min
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

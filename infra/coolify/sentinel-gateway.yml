@@ -1,0 +1,28 @@
+# Loaded by the controller's Traefik file provider on its private entrypoint.
+http:
+  routers:
+    reltide-controller-health:
+      entryPoints:
+        - sentinel
+      rule: "Path(`/api/health`) && Method(`GET`)"
+      middlewares:
+        - reltide-sentinel-sources
+      service: reltide-sentinel
+    reltide-sentinel:
+      entryPoints:
+        - sentinel
+      rule: "Path(`/api/v1/sentinel/push`) && Method(`POST`)"
+      middlewares:
+        - reltide-sentinel-sources
+      service: reltide-sentinel
+  middlewares:
+    reltide-sentinel-sources:
+      ipAllowList:
+        sourceRange:
+          - 172.30.0.3/32
+          - 172.30.0.4/32
+  services:
+    reltide-sentinel:
+      loadBalancer:
+        servers:
+          - url: http://coolify:8080

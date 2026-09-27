@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Coolify controller recovery bundle
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 UTC
+RandomizedDelaySec=5min
+Persistent=true
+Unit=reltide-controller-backup.service
+
+[Install]
+WantedBy=timers.target

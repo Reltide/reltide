@@ -1,17 +1,20 @@
 # MAX-11 — pilot deployment and budget
 
-**Hosting decision updated:** 2026-09-26. Hetzner Cloud in Finland replaces Verda. Authenticated inspection confirms two purchased servers in Finnish location `hel1`. Their service placement, capacity, deployment readiness, and complete recurring bill still require validation. The sub-€100/month target remains a planning constraint; the previous **€93.02/month Verda estimate is superseded** and cannot validate this deployment.
+**Hosting decision updated:** 2026-09-27. Authenticated inspection confirms three purchased Hetzner servers in Finnish location `hel1`. MAX-26 installed the dedicated Coolify controller and connected the staging/production targets. Application capacity and the complete recurring bill still require validation. The sub-€100/month target remains a planning constraint; the previous **€93.02/month Verda estimate is superseded** and cannot validate this deployment.
 
-## Authenticated inventory — 2026-09-26
+## Authenticated inventory — 2026-09-27
 
 The official `hcloud` CLI **v1.69.0**, using context `reltide`, returned:
 
 | Server | ID | Status | Type / CPU | RAM | Included disk | OS image | Location |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `reltide-management` | `167550981` | running | `cx23`, 2 vCPU, x86 | 4 GB | 40 GB | Ubuntu 26.04 | `hel1`, FI |
 | `reltide-production` | `167541434` | running | `cx23`, 2 vCPU, x86 | 4 GB | 40 GB | Ubuntu 26.04 | `hel1`, FI |
 | `reltide-staging` | `167541435` | running | `cx23`, 2 vCPU, x86 | 4 GB | 40 GB | Ubuntu 26.04 | `hel1`, FI |
 
-Each server has an assigned Primary IPv4 and IPv6 with `auto_delete=true`. No Cloud Firewalls, private networks, attached volumes, retained snapshots, or load balancers were returned in this project. Both servers have no backup window; deletion/rebuild protection is disabled and labels are empty. This is control-plane inventory: guest configuration and deployed services were not inspected. The names suggest production/staging roles, which still need service-placement validation.
+Each server has an assigned Primary IPv4 and IPv6. All three have attached Cloud Firewalls and deletion/rebuild protection. SSH is restricted to the operator IPv4, plus the management IPv4 on workload hosts; public web/bootstrap ports remain closed. No separately attached volumes, retained snapshots, load balancers or provider backup windows were found. Guest inspection confirmed empty workload hosts before Docker installation. The controller now runs Coolify; staging runs only a harmless smoke service; production has no application workloads.
+
+MAX-26 added the free Hetzner network `reltide-management-private` (`12689126`, `172.30.0.0/24`, EU central zone) for restricted monitoring callbacks. Guest firewall rules isolate peers because Cloud Firewalls do not filter private traffic. The controller backup bucket `reltide-coolify-backups` belongs to the owner-selected Reltide Cloudflare account (`08b3e06cb2d437fff43076acee66e082`) and uses R2 EU jurisdiction, private access, client-side age encryption and a 30-day lifecycle. See the [Coolify runbook](../operations/coolify.md) for measured recovery evidence and remaining workload deployment gates. [Hetzner network pricing](https://docs.hetzner.com/networking/networks/faq/).
 
 The first unauthenticated attempt failed with `no active context or token`; the owner then configured local access and the reads above succeeded. Never commit or paste tokens into documentation. Repeat inspection with the same project context before deployment:
 
@@ -25,13 +28,14 @@ hcloud --context reltide image list --type snapshot
 hcloud --context reltide load-balancer list
 ```
 
-The API confirms **`hel1` (Finland)** for both servers and their Primary IPs. Confirm account scope and any resources in other projects before calculating the full bill. Use actual invoices/usage and resource prices, including purchased servers that remain allocated. No resources were created, changed, or deleted by this decision. [Official CLI](https://github.com/hetznercloud/cli), [Hetzner locations](https://docs.hetzner.com/cloud/general/locations/).
+The API confirms **`hel1` (Finland)** for all three servers and their Primary IPs. Confirm account scope and any resources in other projects before calculating the full bill. Use actual invoices/usage and resource prices, including purchased servers that remain allocated. MAX-26 configured existing hosts, created the private network and backup bucket, and purchased no additional compute. [Official CLI](https://github.com/hetznercloud/cli), [Hetzner locations](https://docs.hetzner.com/cloud/general/locations/).
 
 ## Deployment targets (placement pending capacity validation)
 
 | Component | Decision | Cost or constraint |
 | --- | --- | --- |
-| Next.js apps, Rust API/workers, Temporal Server/UI | Use the already-purchased Finnish Hetzner servers after inspecting capacity and assigning trusted-service roles. Container deployment; pin OS and runtime images when selected. | Both purchased hosts are CX23, 2 vCPU/4 GB RAM/40 GB, Ubuntu 26.04 x86. The prior 4-vCPU/16-GB capacity assumption does not apply. Load-test before deciding whether production can colocate all durable services; do not buy or rescale resources from the old plan. |
+| Next.js apps, Rust API/workers, Temporal Server/UI | Use the already-purchased Finnish Hetzner servers after inspecting capacity and assigning trusted-service roles. Container deployment; pin OS and runtime images when selected. | The two workload hosts are CX23, 2 vCPU/4 GB RAM/40 GB, Ubuntu 26.04 x86. The prior 4-vCPU/16-GB capacity assumption does not apply. Load-test before deciding whether production can colocate all durable services; do not buy or rescale resources from the old plan. |
+| Coolify management | Dedicated existing CX23; Coolify 4.3.23, private SSH access, encrypted daily R2 EU controller backup. | €5.99/month net server + IPv4 included in the three-host base. Never place application databases, builds or customer execution on the controller. |
 | Temporal persistence | Target self-hosted PostgreSQL **16.15** on a trusted Hetzner host, separate from the application DB, with persistent storage sized after inventory. Target Temporal Server **v1.31.3** (`temporalio/server`, matching `admin-tools` schema tools); PostgreSQL visibility store, no Elasticsearch. Pin images by digest at deployment. These are **targets, not deployed versions**. | Temporal's current sample pairs **v1.31.0** with PostgreSQL **16**, and its sustained-workload guide uses `temporalio/server` with managed schema updates. The v1.31.3 + 16.15 patch pairing is a reasoned target, **not an explicitly certified combination or tested deployment**; apply core and visibility schemas and run a workflow/restore smoke test before accepting it. High availability remains unproven until placement and recovery are tested. [Temporal sample versions](https://github.com/temporalio/samples-server/blob/main/compose/.env), [PostgreSQL compose](https://github.com/temporalio/samples-server/blob/main/compose/docker-compose-postgres.yml), [Temporal deployment](https://docs.temporal.io/self-hosted-guide/deployment), [Temporal v1.31.3](https://github.com/temporalio/temporal/releases/tag/v1.31.3), [PostgreSQL 16.15 release](https://www.postgresql.org/docs/16/release-16-15.html), [official image tag](https://hub.docker.com/v2/repositories/library/postgres/tags/16.15). |
 | Host storage and runtime images | Inventory included server disks, attached volumes, backups, and snapshots. Select an image-distribution method compatible with the Hetzner placement policy. | Do not carry over separate Verda OS-volume or registry charges. No runtime registry is selected by this update; record placement, access, retention, and cost before deployment. |
 | Application DB | Neon **Launch**, PostgreSQL **17**, `aws-eu-central-1` (Frankfurt), fixed 0.25 CU and scale to zero after inactivity. No Temporal tables in Neon. | **$0.106/CU-hour**, **$0.35/GB-month** storage, **$0.20/GB-month** instant-restore history, **$0.09/GB-month** snapshots; no monthly minimum. [Neon pricing](https://neon.com/pricing), [regions](https://neon.com/docs/introduction/regions), [Postgres 17 availability](https://neon.com/blog/postgres-17). |
@@ -43,23 +47,23 @@ The Neon, R2, Resend, and Temporal version assumptions above are carried forward
 
 ## Monthly envelope pending complete bill
 
-The authenticated `/v1/pricing` read returns **EUR**, CX23 in `hel1` at **€0.0088/hour or €5.49/month net**, and Primary IPv4 at **€0.0008/hour or €0.50/month net**. Two servers plus their two IPv4 addresses therefore have a full-month base of **€11.98 net**. The API reports a **20% VAT rate**, giving **€14.376 (€14.38 rounded) gross** for that base. This is a live price schedule, not an invoice or the full deployment cost; do not substitute the earlier Finnish 25.5% model for the API gross amounts. Billing/tax treatment must be confirmed against actual invoices. [Cloud API reference](https://docs.hetzner.cloud/reference/cloud).
+The authenticated `/v1/pricing` read returns **EUR**, CX23 in `hel1` at **€0.0088/hour or €5.49/month net**, and Primary IPv4 at **€0.0008/hour or €0.50/month net**. Three servers plus their three IPv4 addresses therefore have a full-month base of **€17.97 net**. The API reports a **20% VAT rate**, giving **€21.564 (€21.56 rounded) gross** for that base. This is a live price schedule, not an invoice or the full deployment cost; do not substitute the earlier Finnish 25.5% model for the API gross amounts. Billing/tax treatment must be confirmed against actual invoices. [Cloud API reference](https://docs.hetzner.cloud/reference/cloud).
 
-Let **H** be the full recurring pre-tax hosting/image/domain cost: every retained purchased server, separately charged storage/IPs/backups/snapshots, any load balancer, registry, and expected traffic overages. For the observed project, H starts at **€11.98 net plus U**, where **U** is the unquoted additional hosting/image/domain allowance. Use invoices/account rates and the provider's hourly rounding/monthly caps. Prepayment or a completed purchase does not make ongoing resources free. Do not double-count an included server disk as a separately purchased volume.
+Let **H** be the full recurring pre-tax hosting/image/domain cost: every retained purchased server, separately charged storage/IPs/backups/snapshots, any load balancer, registry, and expected traffic overages. For the observed project, H starts at **€17.97 net plus U**, where **U** is the unquoted additional hosting/image/domain allowance. Use invoices/account rates and the provider's hourly rounding/monthly caps. Prepayment or a completed purchase does not make ongoing resources free. Do not double-count an included server disk as a separately purchased volume.
 
-The unchanged non-hosting planning assumptions are: USD conversion at **$1 = €1** as a buffer, Neon at **120 active hours × 0.25 CU** with 1 GB-month each of data, restore-history changes, and snapshot storage; R2 at most 10 GB-month and within account-wide free operation quotas; Resend Free. Revalidate them before deployment.
+The unchanged non-hosting planning assumptions are: USD conversion at **$1 = €1** as a buffer, Neon at **120 active hours × 0.25 CU** with 1 GB-month each of data, restore-history changes, and snapshot storage; R2 at most 10 GB-month and within account-wide free operation quotas; Resend Free. Revalidate them before application deployment. Controller backups are capped at 128 MiB per archive and expire after 30 days; a daily schedule retains at most about 3.75 GiB at that ceiling, inside the existing backup allowance. Manual backups and application backups share the account allowance and require separate growth tracking.
 
 | Monthly bucket | Calculation | Budget (€) |
 | --- | --- | ---: |
-| Hetzner purchased servers + IPv4 | 2 × (€5.49 + €0.50), monthly net price schedule | **11.98** |
+| Hetzner purchased servers + IPv4 | 3 × (€5.49 + €0.50), monthly net price schedule | **17.97** |
 | Additional hosting, images, and domain | Storage/backups/registry/domain/traffic and any other project resources | **U — pending** |
 | Neon Launch | 120 h × 0.25 CU × $0.106 + $0.35 + $0.20 + $0.09 | 3.82 |
 | R2 artifact/backup overage allowance | Account-wide free tier assumed; allowance for small overages | 2.00 |
 | Resend Free | Below 3,000/month and 100/day | 0.00 |
-| **Fixed services and storage** | | **17.80 + U** |
+| **Fixed services and storage** | | **23.79 + U** |
 | **Recovery reserve, separate from jobs** | Restore drill, backup growth, temporary recovery VM/storage | **8.00** |
 | **Job budget, separate from recovery** | At most 3 admitted runs × €4.00 maximum | **12.00** |
-| **Total before modeled VAT** | Rounded planning allowances | **37.80 + U** |
+| **Total before modeled VAT** | Rounded planning allowances | **43.79 + U** |
 | **Modeled cash total** | Apply each service's actual tax treatment; Hetzner API base uses 20% | **Pending** |
 | **Headroom to €100** | Requires actual hosting, tax, and currency treatment | **Pending** |
 
@@ -91,4 +95,4 @@ Hetzner bills an allocated server even when powered off; disposable cleanup must
 - **Before deployment:** repeat authenticated inventory and check other account projects; validate roles, capacity, Ubuntu 26.04/runtime compatibility, disk sizing, network/firewall configuration, backups/deletion protection, quota, and actual resource bill. Record the image-distribution decision and pin deployed images. Initialize Temporal core/visibility schemas using matching tools; complete a workflow, inspect visibility, and demonstrate backup/restore with the target versions. Load-test the actual chosen placement; the old 4-vCPU/16-GB sizing is not a discovered Hetzner configuration. Confirm Neon EU, R2 EU jurisdiction and account-wide free-tier eligibility, Resend limits/transfer terms, actual tax/FX/domain/traffic costs, and the complete sub-€100 forecast. Reopen MAX-11 for this evidence before treating its budget gate as complete.
 - **Before billable AI work:** record provider/model/version, input/output/cache/tool prices, retention/residency terms, and a tested worst-case spend limiter. Reject new jobs if model, execution, R2, email, recovery, or total allowances cannot be enforced.
 
-This decision selects Hetzner in Finland and records the authenticated purchased-server inventory and base price schedule. It does not establish deployed services, isolation, recovery readiness, high availability, or a validated monthly total.
+This decision records the three-host base and completed controller setup. Controller recovery evidence does not establish application or Temporal recovery, execution isolation, high availability, or a validated monthly total. MAX-11 remains open for the complete bill and capacity/admission evidence.

@@ -1,0 +1,17 @@
+# Harmless prebuilt image. Reach it over SSH on staging, never on management.
+services:
+  smoke:
+    image: traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
+    command:
+      - --port=8080
+      - --name=reltide-staging-max26
+    ports:
+      - "127.0.0.1:18080:8080"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    cpus: 0.25
+    restart: unless-stopped

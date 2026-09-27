@@ -1,0 +1,17 @@
+# Apply after Coolify's docker-compose.yml and docker-compose.prod.yml.
+# Private SSH access selected by the operator on 2026-09-27.
+# Update these digests deliberately together with the recovery runbook.
+services:
+  coolify:
+    image: coollabsio/coolify:4.3.23@sha256:79d5c0443696f2fcb280a4d5a15fcc091a51784e566ab212889a08e424d8187c
+    ports: !override
+      - "127.0.0.1:8000:8080"
+  postgres:
+    image: postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81
+  redis:
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+  soketi:
+    image: coollabsio/coolify-realtime:1.0.19@sha256:087c9d263ab0154d68d40c900bf729a8b59a262bd73d8407c2d1104b70cfdedf
+    ports: !override
+      - "127.0.0.1:6001:6001"
+      - "127.0.0.1:6002:6002"
