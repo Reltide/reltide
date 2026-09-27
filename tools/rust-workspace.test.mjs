@@ -27,6 +27,7 @@ test("Nx tracks the Cargo crate and generated client dependencies", () => {
     "reltide-domain",
     "reltide-api",
     "reltide-worker",
+    "reltide-capacity-probe",
     "@repo/api-client",
   ]) {
     assert.ok(nodes[project], `${project} is missing from the Nx graph`);
@@ -80,6 +81,7 @@ test.each([
     "reltide-domain",
     "reltide-api",
     "reltide-worker",
+    "reltide-capacity-probe",
     "@repo/api-client",
   ]) {
     assert.ok(affected.has(project), `${file} should affect ${project}`);
