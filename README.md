@@ -15,6 +15,7 @@ pnpm build
 pnpm typecheck
 pnpm check
 pnpm rust:check
+pnpm ci:release
 ```
 
 Start one shell with `pnpm nx run app:dev`, `pnpm nx run web:dev`, or `pnpm nx run docs:dev`. They listen on ports 3000, 3001, and 3004. The frontend shells build without credentials or hosted services. They do not yet connect to repositories or run migrations.
@@ -26,6 +27,12 @@ Installation prepares Husky's `pre-commit` and `commit-msg` hooks. The pre-commi
 The `Conventional PR title` GitHub Actions check applies the shared commitlint configuration to pull request titles when a PR opens, is edited, reopens, or receives new commits. The shared configuration disables automatic skips for merge and revert messages and version tags. Use titles such as `feat: add repository onboarding` or `fix(api): handle timeouts`. Editing an invalid title reruns the check. Require `Conventional PR title` in the main branch's protection rule or ruleset to block merges when the check fails. The current private repository plan does not support that protection, so failed checks are advisory until it is available.
 
 The layout keeps next-forge's `apps/` and `packages/` split. It was adapted from [next-forge commit `f189de7`](https://github.com/haydenbleasel/next-forge/tree/f189de79ceef7c1ef69f61f12e272f99b4cdb699) under its [MIT license](LICENSE.next-forge.md). The three Next.js app shells were generated with `@nx/next` 23.2.1; Nx replaces Turborepo. The upstream Mintlify docs were replaced with a Fumadocs shell, and the Next.js backend integrations were removed for the planned Rust backend.
+
+## CI and dependency maintenance
+
+`pnpm ci:release` runs the full quality suite, including a digest-pinned Renovate validator (Docker required), affected-coverage regression tests, frontend/docs/client checks, and default/no-default/all-features Rust checks with optimized builds. PRs run affected frontend/docs tasks plus every Rust configuration; main pushes, release tags, and manual workflow runs check all projects. Require `Quality gates` and `Conventional PR title` once the private repository plan supports protection.
+
+Renovate proposes stable npm, Cargo, toolchain, container, and action updates, including majors, for human review. An owner must enable the GitHub App and verify its first upgrade PR. Exact commands, runner isolation, compatibility blockers, and tooling fallbacks are documented in [maintenance](docs/maintenance.md).
 
 ## Rust workspace
 

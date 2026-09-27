@@ -65,25 +65,23 @@ test("an API source change affects the client and dashboard", () => {
   }
 });
 
-test("root Cargo, toolchain, and Rust tool config changes affect the Rust graph", () => {
-  for (const file of [
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain.toml",
-    "rustfmt.toml",
-    ".rustfmt.toml",
-    "clippy.toml",
-    ".clippy.toml",
-  ]) {
-    const affected = affectedBy(file);
+test.each([
+  "Cargo.toml",
+  "Cargo.lock",
+  "rust-toolchain.toml",
+  "rustfmt.toml",
+  ".rustfmt.toml",
+  "clippy.toml",
+  ".clippy.toml",
+])("%s changes affect the Rust graph", (file) => {
+  const affected = affectedBy(file);
 
-    for (const project of [
-      "reltide-domain",
-      "reltide-api",
-      "reltide-worker",
-      "@repo/api-client",
-    ]) {
-      assert.ok(affected.has(project), `${file} should affect ${project}`);
-    }
+  for (const project of [
+    "reltide-domain",
+    "reltide-api",
+    "reltide-worker",
+    "@repo/api-client",
+  ]) {
+    assert.ok(affected.has(project), `${file} should affect ${project}`);
   }
 });
