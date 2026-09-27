@@ -15,6 +15,9 @@
     "github-actions",
     "custom.regex"
   ],
+  "docker-compose": {
+    "managerFilePatterns": ["infra/coolify/*.compose.yml"]
+  },
   "automerge": false,
   "ignoreUnstable": true,
   "rangeStrategy": "pin",
