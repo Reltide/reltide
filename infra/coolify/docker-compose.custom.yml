@@ -9,7 +9,7 @@ services:
   postgres:
     image: postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81
   redis:
-    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    image: redis:8-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
   soketi:
     image: coollabsio/coolify-realtime:1.0.20@sha256:e58e4ae6bd2446125dc54edf3a0d36e4084bb4a43f392eebb0d1518251378334
     ports: !override
