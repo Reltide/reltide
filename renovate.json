@@ -54,6 +54,12 @@
       "groupName": "Nx"
     },
     {
+      "matchPackageNames": ["fumadocs-core", "fumadocs-ui"],
+      "groupName": "Fumadocs core and UI",
+      "groupSingleUpdates": true,
+      "minimumGroupSize": 2
+    },
+    {
       "matchPackageNames": ["rust"],
       "groupName": "Rust toolchain and workspace version"
     },
