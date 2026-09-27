@@ -1,6 +1,6 @@
 # MAX-11 — staging capacity and recovery design
 
-**Original written spec approved on 27 September 2026. Revised the same day for the owner's explicit self-hosted `pg_clickhouse` clarification; review this revision with the implementation plan before execution-method selection and implementation.**
+**The owner approved the revised self-hosted `pg_clickhouse` spec and implementation plan on 27 September 2026 and selected Subagent-driven execution. Implementation and independent review precede the staging experiment.**
 
 ## Purpose and decision
 

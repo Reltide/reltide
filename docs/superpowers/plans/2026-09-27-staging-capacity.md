@@ -10,7 +10,7 @@
 
 **Spec:** [Staging capacity and recovery design, revised for the owner's self-hosted extension clarification](../specs/2026-09-27-staging-capacity-design.md).
 
-**Status:** Original written spec approved; revised spec and plan ready for review after the 27 September self-hosted extension clarification. Execution method has not been selected. No product code, image build, deployment, managed service or backup bucket creation is performed by this planning change.
+**Status:** The owner approved the revised spec and plan on 27 September 2026 and selected Subagent-driven execution. Implementation is in progress; staging execution follows the implementation and independent-review checks below. Approval itself does not establish deployment or capacity evidence.
 
 ## Global Constraints
 
