@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Reltide hosts every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=15s
+Unit=reltide-monitor.service
+
+[Install]
+WantedBy=timers.target

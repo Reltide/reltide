@@ -40,7 +40,7 @@ Require `Quality gates` and `Conventional PR title` on main once the repository 
 
 Untrusted code runs on ephemeral GitHub-hosted Ubuntu runners with `contents: read`, no deployment credentials/environment, and no production-host access. Checkout credentials are not persisted. No privileged job consumes PR artifacts/caches. Actions are SHA-pinned; the validator uses a version and digest. The title workflow's `pull_request_target` job checks out only the immutable base SHA and passes title text through an environment variable, never executing PR-head code.
 
-Platform deployment targets Hetzner Cloud in Finland (`hel1`). Inspect the already purchased servers before choosing service placement or adding resources. Future trusted deployment jobs and disposable execution environments must preserve the separation from untrusted CI jobs and production hosts.
+Platform deployment targets Hetzner Cloud in Finland (`hel1`). Inspect the already purchased servers before choosing service placement or adding resources. Future trusted deployment jobs and disposable execution environments must preserve the separation from untrusted CI jobs and production hosts. The [Coolify runbook](operations/coolify.md) covers the dedicated management host; builds remain in CI.
 
 ## Dependency upgrades
 
