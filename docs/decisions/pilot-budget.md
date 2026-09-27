@@ -43,6 +43,8 @@ The API confirms **`hel1` (Finland)** for all three servers and their Primary IP
 | Transactional email | Target **Resend Free** via API, for transactional mail only. | **$0/month** for up to **3,000 emails/month and 100/day**. Pro is **$20/month** for 50,000/month and is outside this envelope. Resend stores message content, logs, webhook payloads, and account data in the **US**; an EU sending region changes routing, not storage. Review this transfer before sending personal data. [Resend pricing](https://resend.com/pricing), [Resend data location and DPA](https://resend.com/security/gdpr). |
 | Disposable job environment | A fresh Hetzner Cloud VM in Finland for each job and independent verification, separate from trusted servers; at most one concurrent job VM. Existing purchased servers remain outside disposable cleanup. | The VM type, image, price, quota, and isolation boundary must be verified in MAX-12. The existing €0.50/run execution allowance is a **cap to validate**, not a Hetzner quote. |
 
+All R2 backup buckets belong to the owner-selected Reltide Cloudflare account (`08b3e06cb2d437fff43076acee66e082`), with EU jurisdiction and separate credentials by purpose/environment.
+
 The Neon, R2, Resend, and Temporal version assumptions above are carried forward from 2026-09-25; this provider change does not establish new service pricing or a tested deployment. External AI inference remains permitted, with no selected provider/model or fixed AI charge. Record its published prices, processing terms, and metering before billable work.
 
 ## Monthly envelope pending complete bill
