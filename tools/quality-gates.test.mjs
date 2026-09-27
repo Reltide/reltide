@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { test } from "vitest";
@@ -8,6 +9,27 @@ const workspaceRoot = path.resolve(import.meta.dirname, "..");
 const nx = path.join(workspaceRoot, "node_modules/.bin/nx");
 const nxJson = (...args) =>
   JSON.parse(execFileSync(nx, args, { cwd: workspaceRoot, encoding: "utf-8" }));
+
+test("the Node runtime agrees with both committed version pins", () => {
+  const pinnedVersion = readFileSync(
+    path.join(workspaceRoot, ".node-version"),
+    "utf-8"
+  ).trim();
+  const { engines } = JSON.parse(
+    readFileSync(path.join(workspaceRoot, "package.json"), "utf-8")
+  );
+
+  assert.equal(
+    engines.node.replace(/^v/u, ""),
+    pinnedVersion,
+    "package.json engines.node and .node-version must select the same Node release"
+  );
+  assert.equal(
+    process.versions.node,
+    pinnedVersion,
+    "Run checks with the Node release pinned in .node-version"
+  );
+});
 
 test.each([
   "package.json",

@@ -6,7 +6,7 @@ Reltide is an early-stage developer tool for teams that depend on external APIs.
 
 ## Local foundation
 
-Use Node `26.9.0`, pnpm `12.6.0`, and the Rust toolchain pinned in `rust-toolchain.toml`. From a clean checkout:
+Use Node `26.10.0`, pnpm `12.6.0`, and the Rust toolchain pinned in `rust-toolchain.toml`. From a clean checkout:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -32,7 +32,7 @@ The layout keeps next-forge's `apps/` and `packages/` split. It was adapted from
 
 `pnpm ci:release` runs the full quality suite, including a digest-pinned Renovate validator (Docker required), affected-coverage regression tests, frontend/docs/client checks, and default/no-default/all-features Rust checks with optimized builds. PRs run affected frontend/docs tasks plus every Rust configuration; main pushes, release tags, and manual workflow runs check all projects. Require `Quality gates` and `Conventional PR title` once the private repository plan supports protection.
 
-Renovate proposes stable npm, Cargo, toolchain, container, and action updates, including majors, for human review. An owner must enable the GitHub App and verify its first upgrade PR. Exact commands, runner isolation, compatibility blockers, and tooling fallbacks are documented in [maintenance](docs/maintenance.md).
+Renovate proposes stable npm, Cargo, toolchain, container, and action updates, including majors, for human review. The GitHub App is enabled, and its dependency dashboard and first upgrade PRs have been verified. Exact commands, runner isolation, compatibility blockers, and tooling fallbacks are documented in [maintenance](docs/maintenance.md).
 
 ## Rust workspace
 
