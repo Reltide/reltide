@@ -37,6 +37,7 @@
       "{workspaceRoot}/tsconfig.json",
       "{workspaceRoot}/oxlint.config.ts",
       "{workspaceRoot}/oxfmt.config.ts",
+      "{workspaceRoot}/vitest.config.mjs",
       "{workspaceRoot}/tools/**/*",
       "{workspaceRoot}/.github/**/*",
       "{workspaceRoot}/renovate.json",
