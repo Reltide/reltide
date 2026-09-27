@@ -11,7 +11,7 @@ services:
   redis:
     image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
   soketi:
-    image: coollabsio/coolify-realtime:1.0.19@sha256:087c9d263ab0154d68d40c900bf729a8b59a262bd73d8407c2d1104b70cfdedf
+    image: coollabsio/coolify-realtime:1.0.20@sha256:e58e4ae6bd2446125dc54edf3a0d36e4084bb4a43f392eebb0d1518251378334
     ports: !override
       - "127.0.0.1:6001:6001"
       - "127.0.0.1:6002:6002"
