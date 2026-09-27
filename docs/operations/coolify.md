@@ -29,7 +29,7 @@ Each target has a distinct ED25519 key, stored encrypted in Coolify. Its authori
 
 ## Versions and network controls
 
-The checked-in files under [`infra/coolify`](../../infra/coolify) record the deployed configuration:
+The checked-in files under [`infra/coolify`](../../infra/coolify) record the deployment and the review fixes awaiting rollout as identified below:
 
 - Coolify **4.3.23**, PostgreSQL 15, Redis 7 and realtime **1.0.19** use exact image digests in `docker-compose.custom.yml`.
 - Traefik **3.7.13** uses an exact digest on all hosts. The installer's 3.6 branch was replaced because its security support ended. [Supported Traefik releases](https://doc.traefik.io/traefik/deprecation/releases/), [3.7.13 release](https://github.com/traefik/traefik/releases/tag/v3.7.13).
@@ -37,6 +37,8 @@ The checked-in files under [`infra/coolify`](../../infra/coolify) record the dep
 - Coolify-managed Sentinel **1.0.1** and helper **1.0.17** were observed. Unlike the supplied compose images, upstream can update these version-tagged helpers independently of the disabled controller auto-update setting. Inspect their versions/digests during maintenance; do not claim all helper updates are disabled. [Coolify 4.3.23 source](https://github.com/coollabsio/coolify/tree/v4.3.23).
 
 Controller ports 8000, 6001 and 6002 bind only to loopback. Its proxy binds web ports to loopback, and the Traefik dashboard port is not published. The only private listener is `172.30.0.2:9800`: the file provider permits authenticated Sentinel POST callbacks and a minimal health GET from `.3` and `.4`. Other paths return 404; missing Sentinel authentication returns 401.
+
+The reviewed proxy definitions disable Traefik's unused API/dashboard with `--api=false`, exclude the proxy container itself from Docker discovery with `traefik.enable=false`, and remove its router/service labels. `api.insecure=false` alone did not protect the earlier `api@internal` router on HTTP port 80: without an explicit rule, Docker discovery supplied a default host rule that clients could match with a crafted Host header. The ping healthcheck and application Docker/file routing remain enabled. These proxy fixes await installation through Coolify's proxy configuration editor/API on all three hosts. Keep public web ingress closed until acceptance verifies `/dashboard/`, `/api/http/routers` and `/api/rawdata` return 404 for the proxy's default host and `coolify-proxy`/`traefik-coolify-proxy` Host headers, while a legitimate application route and `/ping` remain healthy. Inspect regenerated proxy configuration after Coolify updates. [Traefik API configuration](https://doc.traefik.io/traefik/v3.7/reference/install-configuration/api-dashboard/)
 
 Network `reltide-management-private` (`12689126`, `172.30.0.0/24`) is delete-protected. Hetzner private networks are isolated but **not encrypted**. Only health/monitoring uses this private HTTP listener; operator administration uses SSH. Private resource metadata and Sentinel bearer credentials remain inside this trusted network. [Hetzner network FAQ](https://docs.hetzner.com/networking/networks/faq/).
 
@@ -118,4 +120,4 @@ Before each controller/proxy update:
 
 An initial sample after a controller restart used about **1.32 GiB of 3.73 GiB host memory** and **7.01 GiB of 37.21 GiB root filesystem**. This is a point-in-time observation, not a production capacity test. The three-server base is **€17.97/month net**; see the [pilot forecast](../decisions/pilot-budget.md) for shared backup allowances and the remaining complete-bill gate.
 
-Repository verification includes `python3 -m unittest discover -s infra/coolify -p 'test_*.py'`, shell syntax checks, compose validation, and `pnpm ci:release`. Live provisioning, notifications and backup operations are deliberately outside cached Nx targets.
+Repository verification includes `RELTIDE_PROXY_DOCKER_TEST=1 python3 -m unittest discover -s infra/coolify -p 'test_*.py'`, shell syntax checks, compose validation, and `pnpm ci:release`. The Docker flag enables the local routing regression: ephemeral containers from the pinned images bind only to loopback, test all three proxy definitions and a legitimate application route, then clean up. Without the flag, that integration check is explicitly skipped. Live provisioning, notifications and backup operations are deliberately outside cached Nx targets.
