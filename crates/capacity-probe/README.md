@@ -35,7 +35,7 @@ Local integration evidence requires Task 2's isolated stack, a precreated namesp
 
 ```sh
 cargo test -p reltide-capacity-probe --test ledger --locked -- --ignored
-cargo test -p reltide-capacity-probe --test workflow --locked -- --ignored
+cargo test -p reltide-capacity-probe --test replay --locked -- --ignored
 ```
 
 The ledger tests require `CAPACITY_TEST_DATABASE_URL` for the local disposable test database; they install the schema and use synthetic keys. The workflow test requires `CAPACITY_TEST_ENV_FILE` pointing to the restricted file above; it starts a real worker, completes a timer-bearing workflow, exports its history, stops the worker and replays the captured history. Use a fresh namespace/run for each invocation. Its test sequence is 900001. The experiment's later worker-restart/recovery scenario must separately prove a workflow crossing a real process restart, including lost acknowledgements and restored histories; this offline suite does not claim that evidence.
