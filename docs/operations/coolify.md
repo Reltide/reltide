@@ -31,7 +31,7 @@ Each target has a distinct ED25519 key, stored encrypted in Coolify. Its authori
 
 The checked-in files under [`infra/coolify`](../../infra/coolify) record the deployment and the review fixes awaiting rollout as identified below:
 
-- Coolify **4.3.23**, PostgreSQL 15, Redis 7 and realtime **1.0.19** use exact image digests in `docker-compose.custom.yml`.
+- Coolify **4.3.23**, PostgreSQL 15, Redis 7 and realtime **1.0.20** use exact image digests in `docker-compose.custom.yml`. The observed deployment still uses realtime **1.0.19**; the reviewed **1.0.20** patch awaits host rollout and live acceptance.
 - Traefik **3.7.13** uses an exact digest on all hosts. The installer's 3.6 branch was replaced because its security support ended. [Supported Traefik releases](https://doc.traefik.io/traefik/deprecation/releases/), [3.7.13 release](https://github.com/traefik/traefik/releases/tag/v3.7.13).
 - Docker Engine **29.8.1**, containerd **2.3.6** and Compose **5.5.1** were installed from Docker's official Ubuntu repository. Normal OS security maintenance remains enabled.
 - Coolify-managed Sentinel **1.0.1** and helper **1.0.17** were observed. Unlike the supplied compose images, upstream can update these version-tagged helpers independently of the disabled controller auto-update setting. Inspect their versions/digests during maintenance; do not claim all helper updates are disabled. [Coolify 4.3.23 source](https://github.com/coollabsio/coolify/tree/v4.3.23).
