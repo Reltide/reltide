@@ -19,6 +19,7 @@ test.each([
   "tsconfig.json",
   "oxlint.config.ts",
   "oxfmt.config.ts",
+  "vitest.config.mjs",
   "tools/rust-workspace.test.mjs",
   "tools/api-client.test.mjs",
   "tools/docs.test.mjs",
