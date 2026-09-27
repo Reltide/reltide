@@ -26,6 +26,7 @@
     "graft/**"
   ],
   "dependencyDashboard": true,
+  "internalChecksFilter": "strict",
   "lockFileMaintenance": { "enabled": true },
   "prBodyNotes": [
     "Human review is required. Run the full Quality gates workflow on this commit before merging; dependency and toolchain inputs must select all platform projects.",
@@ -44,6 +45,10 @@
     }
   ],
   "packageRules": [
+    {
+      "matchDatasources": ["npm"],
+      "minimumReleaseAge": "1 day"
+    },
     {
       "matchPackageNames": ["nx", "@nx/*"],
       "groupName": "Nx"

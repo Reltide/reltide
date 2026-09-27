@@ -44,8 +44,8 @@
     "vitest": "4.1.11"
   },
   "lint-staged": {
-    "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts,json,jsonc,css,scss,yaml,yml}": "pnpm exec ultracite fix",
-    "*.mdx": "pnpm exec oxfmt"
+    "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}": "pnpm exec ultracite fix",
+    "*.{json,jsonc,css,scss,yaml,yml,mdx}": "pnpm exec oxfmt"
   },
   "engines": {
     "node": "v26.10.0"
