@@ -33,6 +33,14 @@ def docker(*args, **kwargs):
     return subprocess.run([*DOCKER, *args], check=True, **kwargs)
 
 
+def validate_inventory(result):
+    # This is the current three-server pilot acceptance profile.
+    # Coolify tracks Docker-image applications separately from compose services.
+    if (result["server_count"] != 3 or result["ssh_key_count"] < 3
+            or result["service_count"] + result["application_count"] < 1):
+        raise RuntimeError("Expected controller inventory is missing")
+
+
 def main():
     DOCKER.extend(local_docker_command())
     backup, administrator = (Path(arg).resolve() for arg in sys.argv[1:])
@@ -96,22 +104,24 @@ $result = [
     'ssh_key_count' => $keys->count(),
     'server_count' => App\Models\Server::count(),
     'service_count' => App\Models\Service::count(),
+    'application_count' => App\Models\Application::count(),
 ];
 foreach (['admin_password_valid','two_factor_confirmed','two_factor_secret_decrypted','ssh_keys_decrypted'] as $check) {
     if (!$result[$check]) { throw new RuntimeException($check.' failed'); }
 }
-if ($result['server_count'] !== 3 || $result['ssh_key_count'] < 3 || $result['service_count'] < 1) {
-    throw new RuntimeException('Expected controller inventory is missing');
-}
 echo json_encode($result).PHP_EOL;
 '''
-            docker("run", "--rm", "--no-healthcheck", "--name", prefix + "-app", "--network", network,
+            restored = docker("run", "--rm", "--no-healthcheck", "--name", prefix + "-app", "--network", network,
                    "--env-file", str(environment), "--env", "DB_HOST=" + database,
                    "--env", "REDIS_HOST=" + redis,
                    "--env", "CACHE_STORE=array", "--env", "CACHE_DRIVER=array",
                    "--env", "SESSION_DRIVER=array", "--env", "QUEUE_CONNECTION=sync",
                    "--mount", f"type=bind,source={administrator},target=/tmp/administrator.json,readonly",
-                   "--entrypoint", "php", images["coolify"], "-r", php)
+                   "--entrypoint", "php", images["coolify"], "-r", php,
+                   capture_output=True, text=True)
+            inventory = json.loads(restored.stdout)
+            validate_inventory(inventory)
+            print(json.dumps(inventory))
             docker("run", "--detach", "--rm", "--no-healthcheck", "--name", prefix + "-app", "--network", network,
                    "--env-file", str(environment), "--env", "DB_HOST=" + database,
                    "--env", "REDIS_HOST=" + redis,

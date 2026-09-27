@@ -1,6 +1,7 @@
 """Exercise alert persistence, retries, recovery, and consecutive-check thresholds."""
 
 import datetime
+import errno
 import json
 from pathlib import Path
 import tempfile
@@ -66,6 +67,64 @@ class MonitoringTests(unittest.TestCase):
             self.run_checks({"controller": (False, "up", 1)})
             send.assert_called_once()
             self.assertIn("[RECOVERED]", send.call_args.args[1])
+
+    def test_unwritable_state_does_not_silence_current_failures(self):
+        checks = {name: (True, "bad", 3) for name in ("disk", "memory", "controller")}
+        with patch.object(monitor, "save_state", side_effect=OSError(errno.ENOSPC, "full")), \
+                patch.object(monitor, "send") as send:
+            failures = self.run_checks(checks)
+            self.assertEqual(send.call_count, 3)
+            self.assertEqual(failures, [{"check": "state", "error": "OSError"}])
+        self.assertFalse(self.path.exists())
+
+    def test_state_failure_after_delivery_does_not_block_other_alerts(self):
+        checks = {name: (True, "bad", 1) for name in ("disk", "memory", "controller")}
+        save = monitor.save_state
+        attempts = 0
+
+        def fail_after_initial_save(path, state):
+            nonlocal attempts
+            attempts += 1
+            if attempts > 1:
+                raise OSError(errno.ENOSPC, "full")
+            save(path, state)
+
+        with patch.object(monitor, "save_state", side_effect=fail_after_initial_save), \
+                patch.object(monitor, "send") as send:
+            failures = self.run_checks(checks)
+            self.assertEqual(send.call_count, 3)
+            self.assertEqual(failures, [{"check": "state", "error": "OSError"}])
+        saved = json.loads(self.path.read_text())
+        self.assertFalse(saved["disk"]["alerted"])
+        with patch.object(monitor, "send") as send:
+            self.assertEqual(self.run_checks(checks), [])
+            self.assertEqual(send.call_count, 3)
+
+    def test_late_state_failure_alerts_earlier_checks_below_threshold(self):
+        checks = {
+            "disk": (True, "disk high", 3),
+            "memory": (True, "memory high", 3),
+            "backup": (True, "backup stale", 1),
+        }
+        save = monitor.save_state
+        attempts = 0
+
+        def fail_after_initial_save(path, state):
+            nonlocal attempts
+            attempts += 1
+            if attempts > 1:
+                raise OSError(errno.ENOSPC, "full")
+            save(path, state)
+
+        with patch.object(monitor, "save_state", side_effect=fail_after_initial_save), \
+                patch.object(monitor, "send") as send:
+            failures = self.run_checks(checks)
+            self.assertEqual(send.call_count, 3)
+            self.assertEqual(
+                {call.args[2] for call in send.call_args_list},
+                {"disk high", "memory high", "backup stale"},
+            )
+            self.assertEqual(failures, [{"check": "state", "error": "OSError"}])
 
 
 if __name__ == "__main__":

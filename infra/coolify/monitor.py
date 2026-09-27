@@ -39,18 +39,27 @@ def process_checks(config, checks, path, now, host):
         previous = state.get(name, {"count": 0, "alerted": False, "sent": 0})
         previous["count"] = previous["count"] + 1 if bad else 0
         state[name] = previous
-    # Preserve every detector's progress even if the mail provider fails.
-    save_state(path, state)
     failures = []
+    state_writable = True
+    # Preserve detector progress, but unavailable storage must not silence alerts.
+    try:
+        save_state(path, state)
+    except OSError as error:
+        state_writable = False
+        failures.append({"check": "state", "error": type(error).__name__})
+    attempted = set()
     for name, (bad, description, required) in checks.items():
         previous = state[name]
-        alert = bad and previous["count"] >= required and (
-            not previous["alerted"] or now.timestamp() - previous["sent"] >= 86400
-        )
+        alert = bad and (not state_writable or (
+            previous["count"] >= required and (
+                not previous["alerted"] or now.timestamp() - previous["sent"] >= 86400
+            )
+        ))
         recovery = not bad and previous["alerted"]
         if not (alert or recovery):
             continue
         status = "ALERT" if alert else "RECOVERED"
+        attempted.add(name)
         try:
             send(config, f"[{status}] Reltide {host}: {name}", description)
         except Exception as error:
@@ -58,7 +67,21 @@ def process_checks(config, checks, path, now, host):
             failures.append({"check": name, "error": type(error).__name__})
             continue
         previous.update(alerted=bool(alert), sent=now.timestamp())
-        save_state(path, state)
+        if state_writable:
+            try:
+                save_state(path, state)
+            except OSError as error:
+                state_writable = False
+                failures.append({"check": "state", "error": type(error).__name__})
+    if not state_writable:
+        # A late write failure also invalidates earlier checks' threshold tracking.
+        for name, (bad, description, _) in checks.items():
+            if not bad or name in attempted:
+                continue
+            try:
+                send(config, f"[ALERT] Reltide {host}: {name}", description)
+            except Exception as error:
+                failures.append({"check": name, "error": type(error).__name__})
     return failures
 
 
@@ -105,7 +128,7 @@ def main():
             stale = True
         checks["backup"] = (stale, f"Verified off-server controller backup within 26 hours: {not stale}", 1)
 
-    directory = Path("/var/lib/reltide-monitor")
+    directory = Path("/run/reltide-monitor")
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     with (directory / "lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
