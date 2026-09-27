@@ -36,27 +36,54 @@ CI runs on all PRs, main pushes, `v*` tags, and manual dispatch, without path fi
 
 Require `Quality gates` and `Conventional PR title` on main once the repository plan supports protection. The aggregate `Quality gates` job runs after upstream failures and rejects failed, cancelled, or skipped frontend, Rust matrix, or validator jobs. A skipped workflow is not release evidence.
 
-**Enforcement blocker, verified 26 September 2026:** GitHub returns HTTP 403 for main protection and repository rulesets on the private plan. Checks cannot block merges until an owner upgrades the applicable plan and requires both statuses. Keep MAX-10 open until enforcement and updater activation are verified. This change does not alter visibility or purchase a plan. [GitHub required checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)
+**Enforcement blocker, verified 27 September 2026:** Reltide is an organization on GitHub Free, and this repository is private. GitHub returns HTTP 403 for main protection and repository rulesets. The browser's branch-protection form also explicitly says rules will not be enforced until the organization upgrades to Team or Enterprise. An organization owner must upgrade Reltide, then require `Quality gates` and `Conventional PR title` on main. A personal GitHub Pro student benefit does not change the organization's plan. Keep MAX-10 open until enforcement is verified. [GitHub protected branch availability](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
 
 Untrusted code runs on ephemeral GitHub-hosted Ubuntu runners with `contents: read`, no deployment credentials/environment, and no production-host access. Checkout credentials are not persisted. No privileged job consumes PR artifacts/caches. Actions are SHA-pinned; the validator uses a version and digest. The title workflow's `pull_request_target` job checks out only the immutable base SHA and passes title text through an environment variable, never executing PR-head code.
 
-Platform deployment remains on Verda in Finland. Future trusted deployment jobs and ephemeral Verda CI runners must preserve the separation from untrusted jobs.
+Platform deployment targets Hetzner Cloud in Finland (`hel1`). Inspect the already purchased servers before choosing service placement or adding resources. Future trusted deployment jobs and disposable execution environments must preserve the separation from untrusted CI jobs and production hosts.
 
 ## Dependency upgrades
 
 Renovate covers npm (including pnpm), Cargo, `.node-version`, Rust toolchain/workspace version, Dockerfiles/Compose, and GitHub Actions. It retains exact versions and image/action digests. Stable majors are eligible; all automerge is disabled. Nx packages update together; Rust updates include the workspace `rust-version`. Cargo/pnpm lockfile maintenance is enabled. [Renovate managers](https://docs.renovatebot.com/modules/manager/), [Rust toolchain updates](https://docs.renovatebot.com/modules/manager/rust-toolchain/)
 
-An owner must enable the [Renovate GitHub App](https://github.com/apps/renovate) for this repo, then verify its dashboard and first upgrade PR after the config reaches main. A config alone does not schedule a bot. Activation is not yet verified; no updater token belongs in PR jobs.
+**Updater activation, verified 27 September 2026:** The owner installed the [Renovate GitHub App](https://github.com/apps/renovate) with access to all Reltide repositories. In the [Mend repository settings](https://developer.mend.io/github/Reltide/reltide/-/settings), Dependency Updates, Automated PRs, Require config file, and Create onboarding PRs are enabled. Silent mode was initially enabled; disabling it changed the repository to Interactive mode and triggered a new scan. That scan created [Dependency Dashboard #13](https://github.com/Reltide/reltide/issues/13), [Node engine pin PR #11](https://github.com/Reltide/reltide/pull/11), and [lint-staged upgrade PR #12](https://github.com/Reltide/reltide/pull/12). Both PRs have automerge disabled and started CI automatically. No updater token belongs in PR jobs.
+
+The dashboard confirms detection of npm, Cargo, Node and Rust toolchains, the digest-pinned container, and GitHub Actions. Major TypeScript, Vitest, and Ubuntu updates remain eligible; they are queued by the normal PR rate limit, not permanently suppressed. If scans finish without a GitHub dashboard or PRs, check Silent mode before assuming a scheduling or repository-access failure.
+
+Initial updater verification passed on 27 September 2026, before PR #11's runtime-alignment follow-up. Both initial PR versions also passed `Conventional PR title`.
+
+| Upgrade PR | Verified commit | PR CI | Full CI |
+| --- | --- | --- | --- |
+| Node engine pin #11 | `9a457014cd22468b007d00782f9ddf1806c7013b` | [Passed](https://github.com/Reltide/reltide/actions/runs/36312801379) | [Passed](https://github.com/Reltide/reltide/actions/runs/36312863903) |
+| lint-staged 17.6.0 #12 | `77884a0c60ce8611fd7141bcd413ad4ebf79ab3e` | [Passed](https://github.com/Reltide/reltide/actions/runs/36312823073) | [Passed](https://github.com/Reltide/reltide/actions/runs/36312926472) |
+
+For subsequent upgrades and completion of MAX-10:
+
+1. Read main's protection or active ruleset and confirm both required status names, with GitHub Actions as their expected source.
+2. Confirm Renovate's repository access, dependency dashboard, and first upgrade PR. Check that the PR preserves exact versions and lockfiles and requires human review.
+3. Verify the upgrade PR's checks, then run the full CI workflow on its current commit before merging. Keep MAX-10 open until this evidence is available.
+
+Use these read-only commands to recheck the external blockers:
+
+```sh
+gh api orgs/Reltide --jq '.plan.name'
+gh api repos/Reltide/reltide/branches/main/protection
+gh api repos/Reltide/reltide/rulesets
+gh api orgs/Reltide/installations --jq '.installations[] | {app_slug, repository_selection, suspended_at}'
+gh issue list --repo Reltide/reltide --state all --search '"Dependency Dashboard" in:title'
+gh pr list --repo Reltide/reltide --state all --author 'app/renovate'
+```
 
 Upgrades must pass PR checks and a manual full workflow on the current commit, receive human review, and preserve lockfiles. Toolchain updates also update contributor docs and `AGENTS.md`. New container/service definitions use supported stable versions/digests. Upgrade suggestions do not authorize provisioning/deployment. Temporal upgrades need its supported schema sequence and worker replay checks once introduced.
+
+Node upgrades must keep `package.json#engines.node`, `.node-version`, and the contributor setup instructions aligned. CI installs Node from `.node-version`; the quality-gate regression checks both committed pins and the running Node version, so an engine-only upgrade cannot pass verification.
 
 Record failing upgrade PRs in the dashboard and blockers below with versions, failure, owner, and retry condition. Reassess when either side releases a new stable version; never permanently ignore upgrades.
 
 | Blocker | Evidence and retry condition | Owner |
 | --- | --- | --- |
 | TypeScript 5.9.3 pin | Nx 23.2.1 generation with TypeScript 7.0.2 fails with `ts.readConfigFile is not a function`. Recheck disposable Nx/Next.js generation on Nx/TypeScript upgrades, alongside full checks. TypeScript PRs remain enabled with this note. | Maintainers |
-| Required-status enforcement | Protection/ruleset APIs return 403. Require both named checks when the private plan supports them. | Repository owner |
-| Updater activation | Bot activation/first upgrade PR are unverified. Enable access and inspect the dashboard/first PR after merge. | Repository owner |
+| Required-status enforcement | Reltide uses GitHub Free; protection/ruleset APIs return 403 for this private repo. Upgrade the organization plan and require both named checks. | Organization owner |
 
 ## Tooling fallbacks
 
