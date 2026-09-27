@@ -36,7 +36,7 @@ CI runs on all PRs, main pushes, `v*` tags, and manual dispatch, without path fi
 
 Require `Quality gates` and `Conventional PR title` on main once the repository plan supports protection. The aggregate `Quality gates` job runs after upstream failures and rejects failed, cancelled, or skipped frontend, Rust matrix, or validator jobs. A skipped workflow is not release evidence.
 
-**Enforcement blocker, verified 27 September 2026:** Reltide is an organization on GitHub Free, and this repository is private. GitHub returns HTTP 403 for main protection and repository rulesets. The browser's branch-protection form also explicitly says rules will not be enforced until the organization upgrades to Team or Enterprise. An organization owner must upgrade Reltide, then require `Quality gates` and `Conventional PR title` on main. A personal GitHub Pro student benefit does not change the organization's plan. Keep MAX-10 open until enforcement is verified. [GitHub protected branch availability](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
+**Enforcement blocker, verified 27 September 2026:** Reltide is an organization on GitHub Free, and this repository is private. GitHub returns HTTP 403 for main protection and repository rulesets. The browser's branch-protection form also explicitly says rules will not be enforced until the organization upgrades to Team or Enterprise. An organization owner must upgrade Reltide, then require `Quality gates` and `Conventional PR title` on main. A personal GitHub Pro student benefit does not change the organization's plan. The owner approved moving this remaining requirement from MAX-10 into [MAX-27](https://linear.app/maximebrmd/issue/MAX-27/enable-required-ci-status-enforcement-for-the-private-repository), which blocks MAX-23 until enforcement is verified. [GitHub protected branch availability](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
 
 Untrusted code runs on ephemeral GitHub-hosted Ubuntu runners with `contents: read`, no deployment credentials/environment, and no production-host access. Checkout credentials are not persisted. No privileged job consumes PR artifacts/caches. Actions are SHA-pinned; the validator uses a version and digest. The title workflow's `pull_request_target` job checks out only the immutable base SHA and passes title text through an environment variable, never executing PR-head code.
 
@@ -50,18 +50,20 @@ Renovate covers npm (including pnpm), Cargo, `.node-version`, Rust toolchain/wor
 
 The dashboard confirms detection of npm, Cargo, Node and Rust toolchains, the digest-pinned container, and GitHub Actions. Major TypeScript, Vitest, and Ubuntu updates remain eligible; they are queued by the normal PR rate limit, not permanently suppressed. If scans finish without a GitHub dashboard or PRs, check Silent mode before assuming a scheduling or repository-access failure.
 
-Initial updater verification passed on 27 September 2026, before PR #11's runtime-alignment follow-up. Both initial PR versions also passed `Conventional PR title`.
+Updater verification passed on 27 September 2026. PR #11 aligned the manifest, CI runtime pin, and contributor instructions on Node 26.10.0 and added a regression that checks both committed pins and the running Node version. PR #12 was updated with that change before verification. Both PRs received human review and passed `Conventional PR title` before merging.
 
 | Upgrade PR | Verified commit | PR CI | Full CI |
 | --- | --- | --- | --- |
-| Node engine pin #11 | `9a457014cd22468b007d00782f9ddf1806c7013b` | [Passed](https://github.com/Reltide/reltide/actions/runs/36312801379) | [Passed](https://github.com/Reltide/reltide/actions/runs/36312863903) |
-| lint-staged 17.6.0 #12 | `77884a0c60ce8611fd7141bcd413ad4ebf79ab3e` | [Passed](https://github.com/Reltide/reltide/actions/runs/36312823073) | [Passed](https://github.com/Reltide/reltide/actions/runs/36312926472) |
+| Node runtime alignment #11 | `ecba306b729a94fbacb3cda733a61b57f0f8e706` | [Passed](https://github.com/Reltide/reltide/actions/runs/36313740468) | [Passed](https://github.com/Reltide/reltide/actions/runs/36313765814) |
+| lint-staged 17.6.0 #12 | `77ebe445eacfae002a0c6e0bd3445fcb187309bf` | [Passed](https://github.com/Reltide/reltide/actions/runs/36314070378) | [Passed](https://github.com/Reltide/reltide/actions/runs/36314086842) |
 
-For subsequent upgrades and completion of MAX-10:
+[Full CI on main](https://github.com/Reltide/reltide/actions/runs/36314349319) also passed on merged commit `ec1b06f20826955c2f1fe79cced3e0261bb31f8c`, including 59 JavaScript tests. MAX-10's CI implementation and updater activation are complete; required-status enforcement remains tracked in MAX-27.
+
+For subsequent upgrades and completion of MAX-27:
 
 1. Read main's protection or active ruleset and confirm both required status names, with GitHub Actions as their expected source.
 2. Confirm Renovate's repository access, dependency dashboard, and first upgrade PR. Check that the PR preserves exact versions and lockfiles and requires human review.
-3. Verify the upgrade PR's checks, then run the full CI workflow on its current commit before merging. Keep MAX-10 open until this evidence is available.
+3. Verify the upgrade PR's checks, then run the full CI workflow on its current commit before merging. Keep MAX-27 open until required-status enforcement is verified.
 
 Use these read-only commands to recheck the external blockers:
 
@@ -83,7 +85,7 @@ Record failing upgrade PRs in the dashboard and blockers below with versions, fa
 | Blocker | Evidence and retry condition | Owner |
 | --- | --- | --- |
 | TypeScript 5.9.3 pin | Nx 23.2.1 generation with TypeScript 7.0.2 fails with `ts.readConfigFile is not a function`. Recheck disposable Nx/Next.js generation on Nx/TypeScript upgrades, alongside full checks. TypeScript PRs remain enabled with this note. | Maintainers |
-| Required-status enforcement | Reltide uses GitHub Free; protection/ruleset APIs return 403 for this private repo. Upgrade the organization plan and require both named checks. | Organization owner |
+| Required-status enforcement ([MAX-27](https://linear.app/maximebrmd/issue/MAX-27/enable-required-ci-status-enforcement-for-the-private-repository)) | Reltide uses GitHub Free; protection/ruleset APIs return 403 for this private repo. Upgrade the organization plan and require both named checks. | Organization owner |
 
 ## Tooling fallbacks
 
