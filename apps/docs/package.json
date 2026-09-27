@@ -15,7 +15,7 @@
   "dependencies": {
     "@repo/design-system": "workspace:*",
     "@repo/next-config": "workspace:*",
-    "fumadocs-core": "16.15.14",
+    "fumadocs-core": "16.15.15",
     "fumadocs-mdx": "15.4.5",
     "fumadocs-openapi": "12.0.3",
     "fumadocs-ui": "16.15.14",
