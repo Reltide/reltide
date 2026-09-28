@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -24,6 +25,91 @@ export const verifyDeploymentIdentity = (artifact, runtimeIdentity) => {
   }
 };
 const secret = () => randomBytes(24).toString("hex");
+export const createCapacityRedactor = (secrets) => (value) => {
+  let safe = String(value);
+  for (const secretValue of [...secrets]
+    .filter((entry) => entry.length > 0)
+    .toSorted((left, right) => right.length - left.length)) {
+    safe = safe.replaceAll(secretValue, "[REDACTED]");
+  }
+  return safe;
+};
+
+export const sanitizeCapacityError = (error, redact) => {
+  const source = error instanceof Error ? error : new Error(String(error));
+  const safe = new Error(redact(source.message));
+  safe.name = redact(source.name);
+  safe.stack = redact(source.stack ?? safe.stack);
+  return safe;
+};
+
+export const executePostgresSql = ({
+  composeArgs,
+  database,
+  env,
+  redact,
+  run = command,
+  service,
+  sql,
+  timeout,
+  user = service === "application-pg" ? "postgres" : "temporal",
+}) => {
+  assert.ok(redact);
+  const commandOptions = { env, input: sql, stdio: "pipe" };
+  if (timeout) {
+    commandOptions.timeout = timeout;
+  }
+  try {
+    return run(
+      "docker",
+      [
+        ...composeArgs,
+        "exec",
+        "-T",
+        service,
+        "psql",
+        "-X",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-U",
+        user,
+        "-d",
+        database,
+        "-At",
+        "-f",
+        "-",
+      ],
+      commandOptions
+    );
+  } catch (error) {
+    throw sanitizeCapacityError(error, redact);
+  }
+};
+
+export const runSanitizedSubprocess = ({
+  args,
+  env,
+  program,
+  redact,
+  stderr = process.stderr,
+  stdout = process.stdout,
+}) => {
+  const result = spawnSync(program, args, {
+    cwd: root,
+    encoding: "utf-8",
+    env,
+    maxBuffer: 16 * 1024 * 1024,
+    stdio: "pipe",
+  });
+  stdout.write(redact(result.stdout ?? ""));
+  stderr.write(redact(result.stderr ?? ""));
+  if (result.error) {
+    throw sanitizeCapacityError(result.error, redact);
+  }
+  if (result.status !== 0) {
+    throw new Error(`${program} exited with status ${result.status}`);
+  }
+};
 export const verifyOwnership = (resource, runId) => {
   const labels = resource.Labels ?? resource.Config?.Labels ?? {};
   if (
@@ -133,35 +219,52 @@ export const finalizeIntegration = async ({
   collectDiagnostics,
   cleanup,
   persist,
+  sanitizeError,
 }) => {
+  assert.ok(sanitizeError);
+  const safeOriginalError = originalError
+    ? sanitizeError(originalError)
+    : undefined;
+  if (safeOriginalError) {
+    evidence.result = "FAIL";
+    evidence.error = safeOriginalError.message;
+  }
   let cleanupError;
   let persistError;
   try {
     await collectDiagnostics();
   } catch (error) {
-    evidence.diagnostic_error = error.message;
+    evidence.diagnostic_error = sanitizeError(error).message;
   } finally {
     try {
       await cleanup();
     } catch (error) {
-      cleanupError = error;
-      evidence.cleanup_error = error.message;
+      cleanupError = sanitizeError(error);
+      evidence.cleanup_error = cleanupError.message;
     } finally {
-      if (!originalError && cleanupError) {
+      if (!safeOriginalError && cleanupError) {
         evidence.result = "FAIL";
         evidence.error = cleanupError.message;
       }
       try {
         await persist();
       } catch (error) {
-        persistError = error;
+        persistError = sanitizeError(error);
       }
     }
   }
-  return originalError ?? cleanupError ?? persistError;
+  return safeOriginalError ?? cleanupError ?? persistError;
 };
 
-const verifyTelemetry = async ({ address, env, ch, wait, runId, evidence }) => {
+const verifyTelemetry = async ({
+  address,
+  env,
+  ch,
+  wait,
+  runId,
+  evidence,
+  registerSecret,
+}) => {
   const origin = "http://127.0.0.1:18000";
   const request = (pathname, options = {}) =>
     fetch(`${origin}${pathname}`, {
@@ -171,6 +274,7 @@ const verifyTelemetry = async ({ address, env, ch, wait, runId, evidence }) => {
   const anonymous = await request("/connections");
   assert.equal(anonymous.status, 401);
   const password = `Synthetic-${secret()}!`;
+  registerSecret(password);
   const registration = await request("/register/password", {
     body: JSON.stringify({
       confirmPassword: password,
@@ -442,6 +546,18 @@ export const integrate = async (runId) => {
     CAPACITY_SESSION_SECRET: secret(),
     CAPACITY_TEMPORAL_PG_PASSWORD: "synthetic-temporal",
   };
+  const secretValues = new Set(
+    Object.entries(env)
+      .filter(
+        ([name, value]) =>
+          name.startsWith("CAPACITY_") &&
+          /PASSWORD|SECRET|TOKEN/u.test(name) &&
+          value.length > 0
+      )
+      .map(([, value]) => value)
+  );
+  const redact = createCapacityRedactor(secretValues);
+  const sanitizeError = (error) => sanitizeCapacityError(error, redact);
   const local = { services: {} };
   await Promise.all(
     Object.entries(lock.derived)
@@ -524,33 +640,19 @@ export const integrate = async (runId) => {
     sql,
     database = service === "application-pg" ? "capacity" : "temporal",
     options = {}
-  ) => {
-    const commandOptions = { env };
-    if (options.timeout) {
-      commandOptions.timeout = options.timeout;
-    }
-    return command(
-      "docker",
-      [
-        ...args,
-        "exec",
-        "-T",
-        service,
-        "psql",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-U",
+  ) =>
+    executePostgresSql({
+      composeArgs: args,
+      database,
+      env,
+      redact,
+      service,
+      sql,
+      timeout: options.timeout,
+      user:
         options.user ??
-          (service === "application-pg" ? "postgres" : "temporal"),
-        "-d",
-        database,
-        "-At",
-        "-c",
-        sql,
-      ],
-      commandOptions
-    );
-  };
+        (service === "application-pg" ? "postgres" : "temporal"),
+    });
   const ch = (sql) =>
     dc(
       "exec",
@@ -931,7 +1033,15 @@ export const integrate = async (runId) => {
     );
     evidence.opamp_listener = true;
     check();
-    await verifyTelemetry({ address, ch, env, evidence, runId, wait });
+    await verifyTelemetry({
+      address,
+      ch,
+      env,
+      evidence,
+      registerSecret: (value) => secretValues.add(value),
+      runId,
+      wait,
+    });
     // Exactly the Task 1 targets execute. Stop the container worker while the
     // replay test owns its one worker; preserve the four-connection combined cap.
     dc("stop", "probe");
@@ -943,9 +1053,8 @@ export const integrate = async (runId) => {
       { mode: 0o600 }
     );
     await chmod(hostFile, 0o600);
-    command(
-      "cargo",
-      [
+    runSanitizedSubprocess({
+      args: [
         "test",
         "-p",
         "reltide-capacity-probe",
@@ -957,15 +1066,14 @@ export const integrate = async (runId) => {
         "--",
         "--ignored",
       ],
-      {
-        env: {
-          ...env,
-          CAPACITY_TEST_DATABASE_URL: databaseUrl,
-          CAPACITY_TEST_ENV_FILE: hostFile,
-        },
-        stdio: "inherit",
-      }
-    );
+      env: {
+        ...env,
+        CAPACITY_TEST_DATABASE_URL: databaseUrl,
+        CAPACITY_TEST_ENV_FILE: hostFile,
+      },
+      program: "cargo",
+      redact,
+    });
     dc("start", "probe");
     evidence.connections = {
       application: Number(
@@ -995,8 +1103,8 @@ export const integrate = async (runId) => {
     evidence.result = "PASS_CORRECTNESS_ONLY";
   } catch (error) {
     evidence.result = "FAIL";
-    evidence.error = error.message;
-    originalError = error;
+    originalError = sanitizeError(error);
+    evidence.error = originalError.message;
   }
   const finalError = await finalizeIntegration({
     cleanup: () => {
@@ -1044,16 +1152,10 @@ export const integrate = async (runId) => {
         return;
       }
       const rawLogs = dc("logs", "--no-color", "--tail", "500");
-      let safeLogs = rawLogs;
-      for (const [name, value] of Object.entries(env)) {
-        if (
-          name.startsWith("CAPACITY_") &&
-          /PASSWORD|SECRET|TOKEN/u.test(name)
-        ) {
-          safeLogs = safeLogs.replaceAll(value, "[REDACTED]");
-        }
-      }
-      await writeFile(path.join(directory, "service-logs.txt"), safeLogs);
+      await writeFile(
+        path.join(directory, "service-logs.txt"),
+        redact(rawLogs)
+      );
     },
     evidence,
     originalError,
@@ -1062,6 +1164,7 @@ export const integrate = async (runId) => {
         path.join(directory, "integration-result.json"),
         `${JSON.stringify(evidence, null, 2)}\n`
       ),
+    sanitizeError,
   });
   if (finalError) {
     throw finalError;

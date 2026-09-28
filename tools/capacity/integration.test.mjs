@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import { test } from "vitest";
 
 import {
+  createCapacityRedactor,
   createReaderProbe,
+  executePostgresSql,
   finalizeIntegration,
+  runSanitizedSubprocess,
+  sanitizeCapacityError,
   seedExpiredTelemetryLog,
   validatePersistedClickHouseLogs,
   verifyDeploymentIdentity,
@@ -15,6 +23,147 @@ import {
   verifyServiceState,
   verifyTcpListener,
 } from "./integration.mjs";
+
+test("failed secret-bearing setup keeps its marker out of argv, evidence and errors", async () => {
+  const marker = "SYNTHETIC_CAPACITY_SECRET_MARKER_4729";
+  const redact = createCapacityRedactor(new Set([marker]));
+  const sql = `ALTER ROLE capacity_runtime PASSWORD '${marker}'`;
+  let commandArgs;
+  let commandOptions;
+  let setupError;
+  try {
+    executePostgresSql({
+      composeArgs: ["compose", "-f", "capacity.json"],
+      database: "capacity",
+      env: { CAPACITY_PG_PASSWORD: marker },
+      redact,
+      run: (_program, args, options) => {
+        commandArgs = args;
+        commandOptions = options;
+        return execFileSync(
+          process.execPath,
+          [
+            "-e",
+            "process.stderr.write(require('node:fs').readFileSync(0, 'utf8')); process.exit(7)",
+          ],
+          { encoding: "utf-8", input: options.input, stdio: "pipe" }
+        );
+      },
+      service: "application-pg",
+      sql,
+    });
+  } catch (error) {
+    setupError = error;
+  }
+  assert.ok(setupError instanceof Error);
+  assert.doesNotMatch(
+    JSON.stringify(commandArgs),
+    /SYNTHETIC_CAPACITY_SECRET_MARKER_4729/u
+  );
+  assert.deepEqual(commandArgs.slice(-2), ["-f", "-"]);
+  assert.equal(commandOptions.input, sql);
+  assert.equal(commandOptions.stdio, "pipe");
+  assert.doesNotMatch(
+    setupError.stack,
+    /SYNTHETIC_CAPACITY_SECRET_MARKER_4729/u
+  );
+  assert.doesNotMatch(
+    setupError.message,
+    /SYNTHETIC_CAPACITY_SECRET_MARKER_4729/u
+  );
+
+  const evidence = { result: "FAIL" };
+  const directory = await mkdtemp(path.join(tmpdir(), "capacity-secret-test-"));
+  try {
+    const file = path.join(directory, "integration-result.json");
+    const finalError = await finalizeIntegration({
+      cleanup: () => {
+        throw new Error(`cleanup ${marker}`);
+      },
+      collectDiagnostics: () => {
+        throw new Error(`diagnostics ${marker}`);
+      },
+      evidence,
+      originalError: setupError,
+      persist: () => writeFile(file, JSON.stringify(evidence)),
+      sanitizeError: (error) => sanitizeCapacityError(error, redact),
+    });
+    const persisted = await readFile(file, "utf-8");
+    assert.doesNotMatch(persisted, /SYNTHETIC_CAPACITY_SECRET_MARKER_4729/u);
+    assert.doesNotMatch(
+      finalError.stack,
+      /SYNTHETIC_CAPACITY_SECRET_MARKER_4729/u
+    );
+    assert.equal(evidence.result, "FAIL");
+    assert.match(evidence.error, /REDACTED/u);
+    assert.match(evidence.diagnostic_error, /REDACTED/u);
+    assert.match(evidence.cleanup_error, /REDACTED/u);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test("uncaught failed setup emits no secret in terminal diagnostics", () => {
+  const marker = "SYNTHETIC_CAPACITY_SECRET_MARKER_4729";
+  const integrationUrl = new URL("integration.mjs", import.meta.url).href;
+  const code = `
+    import { execFileSync } from "node:child_process";
+    import { createCapacityRedactor, executePostgresSql } from ${JSON.stringify(integrationUrl)};
+    const marker = process.env.CAPACITY_TEST_SECRET;
+    executePostgresSql({
+      composeArgs: ["compose"],
+      database: "capacity",
+      env: process.env,
+      redact: createCapacityRedactor(new Set([marker])),
+      run: (_program, _args, options) => execFileSync(process.execPath,
+        ["-e", "process.stderr.write(require('node:fs').readFileSync(0, 'utf8')); process.exit(7)"],
+        { encoding: "utf-8", input: options.input, stdio: "pipe" }),
+      service: "application-pg",
+      sql: "ALTER ROLE capacity_runtime PASSWORD '" + marker + "'",
+    });
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", code],
+    {
+      encoding: "utf-8",
+      env: { ...process.env, CAPACITY_TEST_SECRET: marker },
+    }
+  );
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(result.stderr, /SYNTHETIC_CAPACITY_SECRET_MARKER_4729/u);
+  assert.match(result.stderr, /REDACTED/u);
+});
+
+test("credential-bearing subprocess output is redacted before terminal emission", () => {
+  const marker = "SYNTHETIC_CAPACITY_SECRET_MARKER_4729";
+  const emitted = [];
+  const redact = createCapacityRedactor(new Set([marker]));
+  let failure;
+  try {
+    runSanitizedSubprocess({
+      args: [
+        "-e",
+        "process.stdout.write(process.env.CAPACITY_TEST_SECRET); process.stderr.write(process.env.CAPACITY_TEST_SECRET); process.exit(7)",
+      ],
+      env: { ...process.env, CAPACITY_TEST_SECRET: marker },
+      program: process.execPath,
+      redact,
+      stderr: { write: (value) => emitted.push(value) },
+      stdout: { write: (value) => emitted.push(value) },
+    });
+  } catch (error) {
+    failure = error;
+  }
+  assert.ok(failure instanceof Error);
+  assert.doesNotMatch(failure.stack, /SYNTHETIC_CAPACITY_SECRET_MARKER_4729/u);
+  assert.equal(emitted.length, 2);
+  assert.doesNotMatch(
+    emitted.join(""),
+    /SYNTHETIC_CAPACITY_SECRET_MARKER_4729/u
+  );
+  assert.equal(emitted.join(""), "[REDACTED][REDACTED]");
+});
 
 test("reader probe logs in as the scoped role with its effective timeout and a client deadline", () => {
   const calls = [];
@@ -119,6 +268,7 @@ test("diagnostic failure still cleans owned resources and persists the original 
     persist: () => {
       calls.push("persist");
     },
+    sanitizeError: (error) => error,
   });
   assert.equal(returned, original);
   assert.deepEqual(calls, ["cleanup", "persist"]);
@@ -135,6 +285,7 @@ test("diagnostic failure still cleans owned resources and persists the original 
     persist: () => {
       calls.push("persist after cleanup failure");
     },
+    sanitizeError: (error) => error,
   });
   assert.match(cleanupError.message, /owned cleanup failed/u);
   assert.equal(cleanupEvidence.result, "FAIL");
