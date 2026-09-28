@@ -1,0 +1,16 @@
+.git
+.superpowers
+.capacity
+**/node_modules
+**/.next
+**/.source
+**/.nx
+target
+dist
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+**/*.env
+**/*.pem
+**/*.key
+**/credentials*

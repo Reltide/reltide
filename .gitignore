@@ -6,6 +6,7 @@ node_modules/
 .source/
 dist/
 /target/
+/.capacity/
 *.tsbuildinfo
 
 # Next.js

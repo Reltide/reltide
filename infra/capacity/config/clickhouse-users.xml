@@ -1,0 +1,31 @@
+<clickhouse>
+  <profiles>
+    <default>
+      <max_threads>1</max_threads><max_memory_usage>134217728</max_memory_usage><max_execution_time>5</max_execution_time>
+      <async_insert>1</async_insert><wait_for_async_insert>1</wait_for_async_insert><async_insert_max_data_size>1048576</async_insert_max_data_size><async_insert_busy_timeout_ms>1000</async_insert_busy_timeout_ms>
+    </default>
+    <fixture>
+      <readonly>2</readonly><max_threads>1</max_threads>
+      <max_rows_to_read>20000</max_rows_to_read><max_bytes_to_read>2097152</max_bytes_to_read><max_result_rows>10</max_result_rows><max_execution_time>5</max_execution_time><max_memory_usage>134217728</max_memory_usage><timeout_before_checking_execution_speed>0</timeout_before_checking_execution_speed>
+      <read_overflow_mode>throw</read_overflow_mode><result_overflow_mode>throw</result_overflow_mode>
+      <join_use_nulls>1</join_use_nulls><group_by_use_nulls>1</group_by_use_nulls><final>1</final><transform_null_in>0</transform_null_in>
+      <constraints>
+        <readonly><readonly/></readonly><max_threads><max>1</max></max_threads>
+        <max_rows_to_read><min>1</min><max>20000</max></max_rows_to_read><max_bytes_to_read><min>1</min><max>2097152</max></max_bytes_to_read><max_result_rows><min>1</min><max>10</max></max_result_rows><max_execution_time><min>0.001</min><max>5</max></max_execution_time><max_memory_usage><min>1</min><max>134217728</max></max_memory_usage><timeout_before_checking_execution_speed><readonly/></timeout_before_checking_execution_speed>
+        <read_overflow_mode><readonly/></read_overflow_mode><result_overflow_mode><readonly/></result_overflow_mode>
+        <join_use_nulls><readonly/></join_use_nulls><group_by_use_nulls><readonly/></group_by_use_nulls><final><readonly/></final><transform_null_in><readonly/></transform_null_in>
+      </constraints>
+    </fixture>
+    <ui>
+      <readonly>2</readonly><max_threads>1</max_threads><max_memory_usage>134217728</max_memory_usage><max_execution_time>5</max_execution_time><timeout_before_checking_execution_speed>0</timeout_before_checking_execution_speed>
+      <constraints><readonly><readonly/></readonly><max_memory_usage><min>1</min><max>134217728</max></max_memory_usage><max_execution_time><min>0.001</min><max>5</max></max_execution_time><max_threads><max>1</max></max_threads></constraints>
+    </ui>
+  </profiles>
+  <users>
+    <default><networks replace="replace"><ip>127.0.0.1</ip></networks></default>
+    <capacity_admin><password from_env="CAPACITY_CH_ADMIN_PASSWORD"/><networks><ip>::/0</ip></networks><profile>default</profile><quota>default</quota><access_management>1</access_management></capacity_admin>
+    <capacity_ingest><password from_env="CAPACITY_CH_INGEST_PASSWORD"/><networks><ip>::/0</ip></networks><profile>default</profile><quota>default</quota><grants><query>GRANT SELECT, INSERT, CREATE DATABASE, CREATE TABLE, CREATE VIEW, ALTER TABLE ON otel.*</query></grants></capacity_ingest>
+    <capacity_ui><password from_env="CAPACITY_CH_UI_PASSWORD"/><networks><ip>::/0</ip></networks><profile>ui</profile><quota>default</quota><grants><query>GRANT SELECT ON otel.*</query><query>GRANT SELECT ON system.tables</query><query>GRANT SELECT ON system.columns</query><query>GRANT SELECT ON system.databases</query></grants></capacity_ui>
+    <capacity_fixture><password from_env="CAPACITY_CH_FIXTURE_PASSWORD"/><networks><ip>::/0</ip></networks><profile>fixture</profile><quota>default</quota><grants><query>GRANT SELECT ON capacity_analytics.ledger_sample</query></grants></capacity_fixture>
+  </users>
+</clickhouse>

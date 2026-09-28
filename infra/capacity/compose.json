@@ -1,0 +1,501 @@
+{
+  "name": "reltide-capacity",
+  "services": {
+    "app": {
+      "image": "reltide-capacity/app@sha256:930616bf5be83a9e06291b0cb2b1558c8d5492f8271c38db3cb8d7ff82d72e96",
+      "platform": "linux/amd64",
+      "mem_limit": "128m",
+      "memswap_limit": "128m",
+      "pids_limit": 128,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "ports": [
+        {
+          "target": 3000,
+          "published": "13000",
+          "host_ip": "127.0.0.1",
+          "protocol": "tcp"
+        }
+      ],
+      "environment": {
+        "HOSTNAME": "0.0.0.0",
+        "PORT": "3000",
+        "NEXT_TELEMETRY_DISABLED": "1",
+        "RELTIDE_API_BASE_URL": "http://api:3002"
+      }
+    },
+    "web": {
+      "image": "reltide-capacity/web@sha256:595f8b05c6f880b0829c39b67c5f5c6fbfa5a34d75be4bb06fae97a4b8c6ea78",
+      "platform": "linux/amd64",
+      "mem_limit": "96m",
+      "memswap_limit": "96m",
+      "pids_limit": 128,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "ports": [
+        {
+          "target": 3001,
+          "published": "13001",
+          "host_ip": "127.0.0.1",
+          "protocol": "tcp"
+        }
+      ],
+      "environment": {
+        "HOSTNAME": "0.0.0.0",
+        "PORT": "3001",
+        "NEXT_TELEMETRY_DISABLED": "1"
+      }
+    },
+    "docs": {
+      "image": "reltide-capacity/docs@sha256:e49d0afcb9961aaeeb1fa41a0d8dcca9aae3c877421f17ea17da6a1edd6f8565",
+      "platform": "linux/amd64",
+      "mem_limit": "128m",
+      "memswap_limit": "128m",
+      "pids_limit": 128,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "ports": [
+        {
+          "target": 3004,
+          "published": "13004",
+          "host_ip": "127.0.0.1",
+          "protocol": "tcp"
+        }
+      ],
+      "environment": {
+        "HOSTNAME": "0.0.0.0",
+        "PORT": "3004",
+        "NEXT_TELEMETRY_DISABLED": "1"
+      }
+    },
+    "api": {
+      "image": "reltide-capacity/api@sha256:dffb89ee8f17e704f3532d9eef4944114a07d7c6e71c814dc187f89775e98df7",
+      "platform": "linux/amd64",
+      "mem_limit": "64m",
+      "memswap_limit": "64m",
+      "pids_limit": 128,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "ports": [
+        {
+          "target": 3002,
+          "published": "13002",
+          "host_ip": "127.0.0.1",
+          "protocol": "tcp"
+        }
+      ],
+      "environment": {
+        "RELTIDE_API_BIND": "0.0.0.0:3002"
+      }
+    },
+    "probe": {
+      "image": "reltide-capacity/probe@sha256:c52b40b216d81d79fb7cb81525f4f770c3cb21728033dc9b5fd646b681c7955c",
+      "platform": "linux/amd64",
+      "mem_limit": "96m",
+      "memswap_limit": "96m",
+      "pids_limit": 128,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "command": ["worker"],
+      "environment": {
+        "RELTIDE_CAPACITY_ENV_FILE": "/capacity/probe.env"
+      },
+      "volumes": [
+        "${CAPACITY_RUNTIME_DIR:?required}/probe.env:/capacity/probe.env:ro"
+      ]
+    },
+    "application-pg": {
+      "image": "reltide-capacity/application-pg@sha256:c3ea062709ee655fc0aec384f3eaf5527290a4b81eb3428fc3e4f4e05727413f",
+      "platform": "linux/amd64",
+      "mem_limit": "192m",
+      "memswap_limit": "192m",
+      "pids_limit": 128,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "environment": {
+        "POSTGRES_USER": "postgres",
+        "POSTGRES_DB": "capacity",
+        "POSTGRES_PASSWORD": "${CAPACITY_PG_PASSWORD:?required}"
+      },
+      "volumes": [
+        "application-data:/var/lib/postgresql",
+        "application-wal:/capacity-wal",
+        "./config/app-postgres.conf:/etc/capacity/postgresql.conf:ro"
+      ],
+      "command": ["postgres", "-c", "config_file=/etc/capacity/postgresql.conf"]
+    },
+    "temporal-pg": {
+      "image": "reltide-capacity/temporal-pg@sha256:9301d8d85d73fdb33fd0fc68279c850b2d9571a3736ec19cb2f1eceefff17e11",
+      "platform": "linux/amd64",
+      "mem_limit": "192m",
+      "memswap_limit": "192m",
+      "pids_limit": 128,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "environment": {
+        "POSTGRES_USER": "temporal",
+        "POSTGRES_DB": "temporal",
+        "POSTGRES_PASSWORD": "${CAPACITY_TEMPORAL_PG_PASSWORD:?required}",
+        "PGDATA": "/var/lib/postgresql/data/pgdata"
+      },
+      "volumes": [
+        "temporal-data:/var/lib/postgresql/data",
+        "temporal-wal:/capacity-wal",
+        "./config/temporal-postgres.conf:/etc/capacity/postgresql.conf:ro"
+      ],
+      "command": ["postgres", "-c", "config_file=/etc/capacity/postgresql.conf"]
+    },
+    "temporal": {
+      "image": "temporalio/server:1.32.0@sha256:ca47d4de249b9cc28137628dba77ae5e75e8b313ebb5c801c64615c1c99cbb09",
+      "platform": "linux/amd64",
+      "mem_limit": "448m",
+      "memswap_limit": "448m",
+      "pids_limit": 256,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "entrypoint": ["sh", "/etc/capacity/temporal-launch.sh"],
+      "volumes": [
+        "./config/temporal.yaml:/etc/capacity/temporal.yaml:ro",
+        "./config/temporal-launch.sh:/etc/capacity/temporal-launch.sh:ro"
+      ]
+    },
+    "temporal-ui": {
+      "image": "temporalio/ui:2.54.1@sha256:1f950ff598c810f371c60f1bf16de742caa6b8f60e0cdba05526a434e09b6d43",
+      "platform": "linux/amd64",
+      "mem_limit": "64m",
+      "memswap_limit": "64m",
+      "pids_limit": 128,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "ports": [
+        {
+          "target": 8080,
+          "published": "18080",
+          "host_ip": "127.0.0.1",
+          "protocol": "tcp"
+        }
+      ],
+      "environment": {
+        "TEMPORAL_ADDRESS": "temporal:7233",
+        "TEMPORAL_CORS_ORIGINS": "http://127.0.0.1:18080"
+      }
+    },
+    "clickhouse": {
+      "image": "clickhouse/clickhouse-server:26.9.4.3@sha256:64b4912d43901c1acf1cd0ca7c14fad8b70c7bbd4861ef73bb8b3fb58259cb14",
+      "platform": "linux/amd64",
+      "mem_limit": "640m",
+      "memswap_limit": "640m",
+      "pids_limit": 256,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "environment": {
+        "CAPACITY_CH_ADMIN_PASSWORD": "${CAPACITY_CH_ADMIN_PASSWORD:?required}",
+        "CAPACITY_CH_INGEST_PASSWORD": "${CAPACITY_CH_INGEST_PASSWORD:?required}",
+        "CAPACITY_CH_UI_PASSWORD": "${CAPACITY_CH_UI_PASSWORD:?required}",
+        "CAPACITY_CH_FIXTURE_PASSWORD": "${CAPACITY_CH_FIXTURE_PASSWORD:?required}"
+      },
+      "volumes": [
+        "clickhouse-data:/var/lib/clickhouse",
+        "./config/clickhouse.xml:/etc/clickhouse-server/config.d/capacity.xml:ro",
+        "./config/clickhouse-users.xml:/etc/clickhouse-server/users.d/capacity.xml:ro"
+      ]
+    },
+    "collector": {
+      "image": "docker.clickhouse.com/clickhouse/clickstack-otel-collector:2.39.1@sha256:03c4a2066e2e4de3d93c27733742a535924746dd55a7e117ceaff3d1d34e7d19",
+      "platform": "linux/amd64",
+      "mem_limit": "128m",
+      "memswap_limit": "128m",
+      "pids_limit": 128,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "entrypoint": ["/otelcontribcol"],
+      "command": ["--config=/etc/capacity/collector.yaml"],
+      "environment": {
+        "CAPACITY_OTLP_TOKEN": "${CAPACITY_OTLP_TOKEN:?required}",
+        "CAPACITY_CH_INGEST_PASSWORD": "${CAPACITY_CH_INGEST_PASSWORD:?required}"
+      },
+      "volumes": ["./config/collector.yaml:/etc/capacity/collector.yaml:ro"]
+    },
+    "hyperdx": {
+      "image": "docker.hyperdx.io/hyperdx/hyperdx:2.39.1@sha256:0f88ad527e43f8352f7decc44381c8741c4d5e0122429e95986e14340b98f3dc",
+      "platform": "linux/amd64",
+      "mem_limit": "384m",
+      "memswap_limit": "384m",
+      "pids_limit": 256,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "entrypoint": ["sh", "/etc/capacity/hyperdx-launch.sh"],
+      "volumes": [
+        "./config/hyperdx-launch.sh:/etc/capacity/hyperdx-launch.sh:ro"
+      ],
+      "environment": {
+        "MONGO_URI": "mongodb://capacity:${CAPACITY_MONGO_PASSWORD:?required}@mongo:27017/hyperdx?authSource=admin",
+        "HYPERDX_APP_URL": "http://127.0.0.1",
+        "HYPERDX_APP_PORT": "8080",
+        "HYPERDX_API_PORT": "8000",
+        "HYPERDX_OPAMP_PORT": "4320",
+        "FRONTEND_URL": "http://127.0.0.1:18081",
+        "NEXT_PUBLIC_SERVER_URL": "http://127.0.0.1:18000",
+        "EXPRESS_SESSION_SECRET": "${CAPACITY_SESSION_SECRET:?required}",
+        "USAGE_STATS_ENABLED": "false",
+        "RUN_SCHEDULED_TASKS_EXTERNALLY": "true",
+        "OTEL_SDK_DISABLED": "true",
+        "CLICKHOUSE_HOST": "http://clickhouse:8123",
+        "CLICKHOUSE_USER": "capacity_ui",
+        "CLICKHOUSE_PASSWORD": "${CAPACITY_CH_UI_PASSWORD:?required}"
+      },
+      "ports": [
+        {
+          "target": 8080,
+          "published": "18081",
+          "host_ip": "127.0.0.1"
+        },
+        {
+          "target": 8000,
+          "published": "18000",
+          "host_ip": "127.0.0.1"
+        }
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "wget -q -T 5 -O /dev/null http://127.0.0.1:8000/health && wget -q -T 5 -O /dev/null http://127.0.0.1:8080/"
+        ],
+        "interval": "30s",
+        "timeout": "12s",
+        "start_period": "45s",
+        "retries": 3
+      }
+    },
+    "mongo": {
+      "image": "mongo:8.0.32@sha256:a70d9916fd916ddfdf6fd8552784c599eb26f88c59951c7bcdc50abd158e8be7",
+      "platform": "linux/amd64",
+      "mem_limit": "384m",
+      "memswap_limit": "384m",
+      "pids_limit": 128,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "command": ["mongod", "--wiredTigerCacheSizeGB", "0.25", "--bind_ip_all"],
+      "environment": {
+        "MONGO_INITDB_ROOT_USERNAME": "capacity",
+        "MONGO_INITDB_ROOT_PASSWORD": "${CAPACITY_MONGO_PASSWORD:?required}"
+      },
+      "volumes": ["mongo-data:/data/db"]
+    },
+    "helper": {
+      "image": "temporalio/admin-tools:1.32.0@sha256:8bb84e24db4336de48031a66dbda25a7477d300736fe825893e467042135da1f",
+      "platform": "linux/amd64",
+      "mem_limit": "128m",
+      "memswap_limit": "128m",
+      "pids_limit": 128,
+      "networks": ["private"],
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "restart": "no",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "2m",
+          "max-file": "2"
+        }
+      },
+      "profiles": ["helper"],
+      "environment": {
+        "SQL_PASSWORD": "${CAPACITY_TEMPORAL_PG_PASSWORD:?required}"
+      }
+    }
+  },
+  "networks": {
+    "private": {
+      "internal": false,
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      },
+      "driver": "bridge"
+    }
+  },
+  "volumes": {
+    "application-data": {
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      }
+    },
+    "application-wal": {
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      }
+    },
+    "temporal-data": {
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      }
+    },
+    "temporal-wal": {
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      }
+    },
+    "clickhouse-data": {
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      }
+    },
+    "mongo-data": {
+      "labels": {
+        "com.reltide.capacity.project": "reltide-capacity",
+        "com.reltide.capacity.run": "${CAPACITY_RUN_ID:?required}"
+      }
+    }
+  }
+}
