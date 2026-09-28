@@ -15,7 +15,22 @@
   </merge_tree>
   <logger><level>warning</level><console>1</console><log remove="remove"/><errorlog remove="remove"/></logger>
   <query_log><ttl>event_date + INTERVAL 3 DAY</ttl><flush_interval_milliseconds>7500</flush_interval_milliseconds></query_log>
+  <asynchronous_insert_log><ttl>event_date + INTERVAL 3 DAY</ttl></asynchronous_insert_log>
   <trace_log remove="remove"/>
+  <query_thread_log remove="remove"/>
+  <query_views_log remove="remove"/>
+  <background_schedule_pool_log remove="remove"/>
+  <error_log remove="remove"/>
+  <instrumentation_trace_log remove="remove"/>
+  <query_metric_log remove="remove"/>
+  <iceberg_metadata_log remove="remove"/>
+  <delta_lake_metadata_log remove="remove"/>
+  <crash_log remove="remove"/>
+  <backup_log remove="remove"/>
+  <s3queue_log remove="remove"/>
+  <blob_storage_log remove="remove"/>
+  <aggregated_zookeeper_log remove="remove"/>
+  <zookeeper_connection_log remove="remove"/>
   <metric_log remove="remove"/>
   <asynchronous_metric_log remove="remove"/>
   <processors_profile_log remove="remove"/>

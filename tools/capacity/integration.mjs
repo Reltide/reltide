@@ -60,6 +60,107 @@ export const verifyTcpListener = async (host, port) => {
   }
 };
 
+export const createReaderProbe = (pg) => {
+  const reader = (sql) =>
+    pg("application-pg", sql, "capacity", {
+      timeout: 10_000,
+      user: "capacity_analytics_reader",
+    });
+  const settings = reader(
+    "SELECT session_user,current_user,current_setting('statement_timeout'),current_setting('pg_clickhouse.session_settings')"
+  )
+    .trim()
+    .split("|");
+  assert.deepEqual(
+    settings,
+    [
+      "capacity_analytics_reader",
+      "capacity_analytics_reader",
+      "5s",
+      "join_use_nulls 1, group_by_use_nulls 1, final 1, transform_null_in 0",
+    ],
+    "reader login settings must include the server timeout and extension semantics"
+  );
+  return reader;
+};
+
+export const seedExpiredTelemetryLog = (ch, runId) => {
+  assert.match(runId, /^[a-z0-9-]{1,64}$/u);
+  ch(
+    "ALTER TABLE otel.otel_logs MODIFY TTL toDateTime(Timestamp) + INTERVAL 5 DAY"
+  );
+  assert.match(
+    ch("SHOW CREATE TABLE otel.otel_logs"),
+    /TTL .*toIntervalDay\(5\)/u,
+    "telemetry table must temporarily retain the controlled four-day seed"
+  );
+  ch(
+    `INSERT INTO otel.otel_logs (Timestamp, Body) VALUES (now() - INTERVAL 4 DAY, 'expired-${runId}')`
+  );
+  const stored = ch(
+    `SELECT count() FROM otel.otel_logs WHERE Body='expired-${runId}'`
+  ).trim();
+  assert.equal(
+    stored,
+    "1",
+    "expired seed was not stored before TTL was applied"
+  );
+};
+
+export const validatePersistedClickHouseLogs = (tables) => {
+  assert.ok(
+    tables.some(
+      (table) =>
+        table.name === "query_log" && !table.engine.startsWith("System")
+    )
+  );
+  for (const table of tables) {
+    assert.match(table.name, /^[a-z_]+$/u);
+    if (table.engine.startsWith("System")) {
+      continue;
+    }
+    assert.match(
+      table.create_table_query,
+      /\bTTL\b[^\n]*(?:toIntervalDay\(3\)|INTERVAL 3 DAY)/u,
+      `unbounded system log: ${table.name}`
+    );
+  }
+};
+
+export const finalizeIntegration = async ({
+  evidence,
+  originalError,
+  collectDiagnostics,
+  cleanup,
+  persist,
+}) => {
+  let cleanupError;
+  let persistError;
+  try {
+    await collectDiagnostics();
+  } catch (error) {
+    evidence.diagnostic_error = error.message;
+  } finally {
+    try {
+      await cleanup();
+    } catch (error) {
+      cleanupError = error;
+      evidence.cleanup_error = error.message;
+    } finally {
+      if (!originalError && cleanupError) {
+        evidence.result = "FAIL";
+        evidence.error = cleanupError.message;
+      }
+      try {
+        await persist();
+      } catch (error) {
+        persistError = error;
+      }
+    }
+  }
+  return originalError ?? cleanupError ?? persistError;
+};
+
 const verifyTelemetry = async ({ address, env, ch, wait, runId, evidence }) => {
   const origin = "http://127.0.0.1:18000";
   const request = (pathname, options = {}) =>
@@ -138,11 +239,6 @@ const verifyTelemetry = async ({ address, env, ch, wait, runId, evidence }) => {
                 severityNumber: 9,
                 timeUnixNano: String(now),
               },
-              {
-                body: { stringValue: `expired-${runId}` },
-                severityNumber: 9,
-                timeUnixNano: String(now - 4n * 86_400_000_000_000n),
-              },
             ],
             scope: { name: "capacity" },
           },
@@ -172,6 +268,9 @@ const verifyTelemetry = async ({ address, env, ch, wait, runId, evidence }) => {
       "1",
     30
   );
+  // Seed a controlled old row after real OTLP ingestion and before TTL is
+  // applied, so an absent row cannot be mistaken for successful retention.
+  seedExpiredTelemetryLog(ch, runId);
   const tables = ch(
     "SELECT name,engine FROM system.tables WHERE database='otel' FORMAT JSONEachRow"
   )
@@ -260,6 +359,14 @@ const verifyTelemetry = async ({ address, env, ch, wait, runId, evidence }) => {
   assert.deepEqual(boundedCollector[0].Config.Cmd, [
     "--config=/etc/capacity/collector.yaml",
   ]);
+  ch("SYSTEM FLUSH LOGS");
+  const systemLogs = ch(
+    "SELECT name,engine,create_table_query FROM system.tables WHERE database='system' AND endsWith(name,'_log') FORMAT JSONEachRow"
+  )
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  validatePersistedClickHouseLogs(systemLogs);
   evidence.telemetry = {
     authenticated_hyperdx_search: true,
     authenticated_ingestion: true,
@@ -276,7 +383,10 @@ const verifyTelemetry = async ({ address, env, ch, wait, runId, evidence }) => {
         "https://raw.githubusercontent.com/open-telemetry/opentelemetry-collector/v0.155.0/exporter/exporterhelper/README.md",
     },
     expired_seed_removed: true,
+    expired_seed_source: "controlled_clickhouse_insert_after_otlp_ingestion",
+    expired_seed_stored_before_ttl: true,
     secret_redaction: true,
+    system_logs: systemLogs.map(({ engine, name }) => ({ engine, name })),
     ttl_tables: tables,
   };
 };
@@ -412,23 +522,35 @@ export const integrate = async (runId) => {
   const pg = (
     service,
     sql,
-    database = service === "application-pg" ? "capacity" : "temporal"
-  ) =>
-    dc(
-      "exec",
-      "-T",
-      service,
-      "psql",
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-U",
-      service === "application-pg" ? "postgres" : "temporal",
-      "-d",
-      database,
-      "-At",
-      "-c",
-      sql
+    database = service === "application-pg" ? "capacity" : "temporal",
+    options = {}
+  ) => {
+    const commandOptions = { env };
+    if (options.timeout) {
+      commandOptions.timeout = options.timeout;
+    }
+    return command(
+      "docker",
+      [
+        ...args,
+        "exec",
+        "-T",
+        service,
+        "psql",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-U",
+        options.user ??
+          (service === "application-pg" ? "postgres" : "temporal"),
+        "-d",
+        database,
+        "-At",
+        "-c",
+        sql,
+      ],
+      commandOptions
     );
+  };
   const ch = (sql) =>
     dc(
       "exec",
@@ -468,6 +590,7 @@ export const integrate = async (runId) => {
     run_id: runId,
   };
   let started = false;
+  let originalError;
   try {
     const resolved = JSON.parse(dc("config", "--format", "json"));
     for (const [name, service] of Object.entries(resolved.services)) {
@@ -650,10 +773,10 @@ export const integrate = async (runId) => {
       ).trim(),
       "run_id:text,sequence:integer"
     );
+    const readerPg = createReaderProbe(pg);
     assert.equal(
-      pg(
-        "application-pg",
-        `SET ROLE capacity_analytics_reader; SELECT count(*),min(sequence),max(sequence) FROM capacity_ch.ledger_sample WHERE run_id='${runId}' AND sequence BETWEEN 1 AND 10000`
+      readerPg(
+        `SELECT count(*),min(sequence),max(sequence) FROM capacity_ch.ledger_sample WHERE run_id='${runId}' AND sequence BETWEEN 1 AND 10000`
       )
         .trim()
         .split("\n")
@@ -666,9 +789,7 @@ export const integrate = async (runId) => {
       "CALL ch_extension.clickhouse_perform('capacity_ch_server','DROP TABLE ledger_sample')",
       "SELECT * FROM ch_extension.clickhouse_query('capacity_ch_server','SELECT 1') AS (x int)",
     ]) {
-      assert.throws(() =>
-        pg("application-pg", `SET ROLE capacity_analytics_reader; ${sql}`)
-      );
+      assert.throws(() => readerPg(sql));
     }
     assert.equal(
       pg(
@@ -875,20 +996,13 @@ export const integrate = async (runId) => {
   } catch (error) {
     evidence.result = "FAIL";
     evidence.error = error.message;
-    throw error;
-  } finally {
-    if (started) {
-      const rawLogs = dc("logs", "--no-color");
-      let safeLogs = rawLogs;
-      for (const [name, value] of Object.entries(env)) {
-        if (
-          name.startsWith("CAPACITY_") &&
-          /PASSWORD|SECRET|TOKEN/u.test(name)
-        ) {
-          safeLogs = safeLogs.replaceAll(value, "[REDACTED]");
-        }
+    originalError = error;
+  }
+  const finalError = await finalizeIntegration({
+    cleanup: () => {
+      if (!started) {
+        return;
       }
-      await writeFile(path.join(directory, "service-logs.txt"), safeLogs);
       const cleanupIds = dc("ps", "-aq").trim().split("\n").filter(Boolean);
       const cleanupContainers = cleanupIds.length
         ? JSON.parse(command("docker", ["inspect", ...cleanupIds]))
@@ -924,11 +1038,33 @@ export const integrate = async (runId) => {
         }
       }
       dc("down", "--volumes", "--remove-orphans");
-    }
-    await writeFile(
-      path.join(directory, "integration-result.json"),
-      `${JSON.stringify(evidence, null, 2)}\n`
-    );
+    },
+    collectDiagnostics: async () => {
+      if (!started) {
+        return;
+      }
+      const rawLogs = dc("logs", "--no-color", "--tail", "500");
+      let safeLogs = rawLogs;
+      for (const [name, value] of Object.entries(env)) {
+        if (
+          name.startsWith("CAPACITY_") &&
+          /PASSWORD|SECRET|TOKEN/u.test(name)
+        ) {
+          safeLogs = safeLogs.replaceAll(value, "[REDACTED]");
+        }
+      }
+      await writeFile(path.join(directory, "service-logs.txt"), safeLogs);
+    },
+    evidence,
+    originalError,
+    persist: () =>
+      writeFile(
+        path.join(directory, "integration-result.json"),
+        `${JSON.stringify(evidence, null, 2)}\n`
+      ),
+  });
+  if (finalError) {
+    throw finalError;
   }
   return evidence;
 };

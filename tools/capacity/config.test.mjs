@@ -3,7 +3,25 @@ import { readFileSync } from "node:fs";
 
 import { test } from "vitest";
 
-import { parseCollectorConfig, validateStack } from "./config.mjs";
+import {
+  parseCollectorConfig,
+  validateClickHouseLogConfig,
+  validateStack,
+} from "./config.mjs";
+
+test("pinned ClickHouse audit config bounds every enabled inherited system log", () => {
+  const xml = readFileSync("infra/capacity/config/clickhouse.xml", "utf-8");
+  assert.deepEqual(validateClickHouseLogConfig(xml), []);
+  assert.ok(
+    validateClickHouseLogConfig(xml.replace('<error_log remove="remove"/>', ""))
+      .length > 0
+  );
+  assert.ok(
+    validateClickHouseLogConfig(
+      xml.replace("event_date + INTERVAL 3 DAY", "event_date + INTERVAL 30 DAY")
+    ).length > 0
+  );
+});
 
 const names = [
   "app",

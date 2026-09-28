@@ -133,7 +133,7 @@
     }
   },
   "source_commit": "bcf6f2b93c0a95c3ff421ed5f7f08366b540d548",
-  "config_sha256": "9cfc5b26e9356c882920d8d7f36473d3b53fd51e47b20310edb5795597dac827",
+  "config_sha256": "109f771a223acf4691eecb15af2c4086d63c2889fadf6c87f22d25f1803929ad",
   "build_identity": {
     "build_input_sha256": "3e35efb337c75e5dff1269539a53b2925db8e04239a28110f6d556b0d08b3bfd",
     "purpose": "local_correctness_only",

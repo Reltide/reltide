@@ -52,6 +52,54 @@ const permittedPorts = {
   "temporal-ui": [["18080", 8080]],
   web: [["13001", 3001]],
 };
+// Enabled by the pinned ClickHouse 26.9.4.3 server config unless removed.
+const disabledClickHouseLogs = [
+  "trace_log",
+  "query_thread_log",
+  "query_views_log",
+  "part_log",
+  "background_schedule_pool_log",
+  "text_log",
+  "metric_log",
+  "error_log",
+  "instrumentation_trace_log",
+  "query_metric_log",
+  "asynchronous_metric_log",
+  "iceberg_metadata_log",
+  "delta_lake_metadata_log",
+  "opentelemetry_span_log",
+  "crash_log",
+  "processors_profile_log",
+  "backup_log",
+  "s3queue_log",
+  "blob_storage_log",
+  "aggregated_zookeeper_log",
+  "zookeeper_connection_log",
+];
+export const validateClickHouseLogConfig = (xml) => {
+  const errors = [];
+  for (const name of disabledClickHouseLogs) {
+    const disabled = new RegExp(`<${name}\\s+remove="remove"\\s*/>`, "gu");
+    if ([...xml.matchAll(disabled)].length !== 1) {
+      errors.push(`inherited ClickHouse system log must be disabled: ${name}`);
+    }
+  }
+  for (const name of ["query_log", "asynchronous_insert_log"]) {
+    const block = xml.match(
+      new RegExp(`<${name}>([\\s\\S]*?)</${name}>`, "u")
+    )?.[1];
+    if (!block?.includes("<ttl>event_date + INTERVAL 3 DAY</ttl>")) {
+      errors.push(`enabled ClickHouse system log needs three-day TTL: ${name}`);
+    }
+  }
+  if (
+    !xml.includes('<log remove="remove"/>') ||
+    !xml.includes('<errorlog remove="remove"/>')
+  ) {
+    errors.push("ClickHouse file logs must be disabled");
+  }
+  return errors;
+};
 const pinnedImage = /@sha256:[a-f0-9]{64}$/u;
 const sourceCommit = /^[a-f0-9]{40}$/u;
 const configHash = /^[a-f0-9]{64}$/u;
@@ -330,6 +378,15 @@ export const readStackManifest = async () => {
     read("infra/capacity/limits.json"),
     read("infra/capacity/images.lock.json"),
   ]);
+  const clickhouseLogErrors = validateClickHouseLogConfig(
+    await readFile(
+      path.join(root, "infra/capacity/config/clickhouse.xml"),
+      "utf-8"
+    )
+  );
+  if (clickhouseLogErrors.length) {
+    throw new Error(clickhouseLogErrors.join("; "));
+  }
   const manifest = {
     build_identity: lock.build_identity,
     collector_config: parseCollectorConfig(
