@@ -1,0 +1,18 @@
+[Unit]
+Description=Reltide host resources and controller availability
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/reltide-monitor
+UMask=0077
+TimeoutStartSec=2min
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=disconnected
+RuntimeDirectory=reltide-monitor
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ReadOnlyPaths=/etc/reltide -/var/lib/reltide-controller-backup
