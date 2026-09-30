@@ -669,3 +669,181 @@ test("schema discovery rejects reordered or missing primary-key prefixes", async
     /sort|primary/u
   );
 });
+
+const failureClients = (overrides) => ({
+  analytics: () => {},
+  emit: () => {},
+  http: () => {},
+  requests: { api: ["p"], app: ["a"], docs: ["d"], web: ["w"] },
+  search: () => {},
+  telemetry: () => ({ accepted: 10 }),
+  workflow: () => {},
+  ...overrides,
+});
+
+test("HTTP failure closes pending analytics and drains accepted workload evidence", async () => {
+  const http = Promise.withResolvers();
+  const search = Promise.withResolvers();
+  const workflow = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  const failed = Promise.withResolvers();
+  const external = new AbortController();
+  const events = [];
+  let analytics = 0;
+  let searchSignal;
+  let settled = false;
+  const clients = failureClients({
+    analytics: () => {
+      analytics += 1;
+    },
+    emit: (event) => {
+      events.push(event);
+      if (event.kind === "http" && event.outcome === "failed") {
+        failed.resolve();
+      }
+    },
+    http: () => http.promise,
+    search: (signal) => {
+      searchSignal = signal;
+      started.resolve();
+      return search.promise;
+    },
+    workflow: async ({ emit }) => {
+      await emit({
+        kind: "workflow_started",
+        workflow_id: "accepted-workflow",
+      });
+      await workflow.promise;
+      await emit({
+        kind: "workflow_completed",
+        workflow_id: "accepted-workflow",
+      });
+      return { workflow_id: "accepted-workflow" };
+    },
+  });
+  const run = runLoad(
+    { duration_ms: 1000, http_rps: 1, name: "failure" },
+    clients,
+    external.signal
+  );
+  const rejected = assert.rejects(run, /HTTP failed/u).finally(() => {
+    settled = true;
+  });
+  await started.promise;
+  http.reject(new Error("HTTP failed"));
+  await failed.promise;
+  search.resolve({ rows: 1 });
+  await immediate();
+  const stoppedSignal = searchSignal.aborted;
+  const drainedEarly = settled;
+  workflow.resolve();
+  await rejected;
+  assert.equal(analytics, 0);
+  assert.deepEqual(
+    events.find(
+      (event) => event.kind === "foreground" && event.outcome === "cancelled"
+    )?.search,
+    { rows: 1 }
+  );
+  assert.equal(stoppedSignal, true);
+  assert.equal(external.signal.aborted, false);
+  assert.equal(drainedEarly, false);
+  assert.equal(
+    events.filter((event) => event.kind === "workflow_completed").length,
+    1
+  );
+  assert.equal(
+    events.filter(
+      (event) => event.kind === "telemetry" && event.outcome === "completed"
+    ).length,
+    1
+  );
+  await assert.rejects(
+    runLoad(
+      { duration_ms: 20, http_rps: 1, name: "after-failure" },
+      clients,
+      external.signal
+    ),
+    /HTTP failed/u
+  );
+});
+
+test("failure closes admissions waiting on persistence before every lane", async () => {
+  const persistence = Promise.withResolvers();
+  const failed = Promise.withResolvers();
+  const entered = [];
+  const clients = failureClients({
+    analytics: () => entered.push("analytics"),
+    emit: (event) => {
+      if (event.kind === "http" && event.outcome === "failed") {
+        failed.resolve();
+      }
+      if (event.outcome === "submitted" && event.kind !== "http") {
+        return persistence.promise;
+      }
+    },
+    http: () => {
+      throw new Error("HTTP failed before persistence");
+    },
+    search: () => entered.push("search"),
+    telemetry: () => {
+      entered.push("telemetry");
+      return { accepted: 10 };
+    },
+    verifyTelemetry: () => entered.push("verification"),
+    workflow: () => entered.push("workflow"),
+  });
+  const run = runLoad(
+    { duration_ms: 1000, http_rps: 1, name: "persisting" },
+    clients,
+    new AbortController().signal
+  );
+  const rejected = assert.rejects(run, /HTTP failed before persistence/u);
+  await failed.promise;
+  persistence.resolve();
+  await rejected;
+  assert.deepEqual(entered, []);
+});
+
+test("internal failure waits for an accepted analytics cancellation cleanup", async () => {
+  const http = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  const cleanup = Promise.withResolvers();
+  const failed = Promise.withResolvers();
+  let querySignal;
+  let cleaned = false;
+  let settled = false;
+  const clients = failureClients({
+    analytics: async (signal) => {
+      querySignal = signal;
+      started.resolve();
+      await cleanup.promise;
+      cleaned = true;
+      throw new Error("backend cleanup failed");
+    },
+    emit: (event) => {
+      if (event.kind === "http" && event.outcome === "failed") {
+        failed.resolve();
+      }
+    },
+    http: () => http.promise,
+  });
+  const run = runLoad(
+    { duration_ms: 1000, http_rps: 1, name: "cleanup" },
+    clients,
+    new AbortController().signal
+  );
+  const rejected = assert.rejects(run, /HTTP failed/u).finally(() => {
+    settled = true;
+  });
+  await started.promise;
+  http.reject(new Error("HTTP failed"));
+  await failed.promise;
+  const wasAborted = querySignal.aborted;
+  const drainedEarly = settled;
+  cleanup.resolve();
+  await rejected;
+  assert.equal(wasAborted, true);
+  assert.equal(drainedEarly, false);
+  assert.equal(cleaned, true);
+});

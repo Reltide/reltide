@@ -322,18 +322,20 @@ export const createForegroundPermit = () => {
 };
 
 const phaseOperations = (clients, result, stop, emit, permit, admitted) => ({
-  foreground: async () => {
+  foreground: async (output) => {
     const search = await permit((signal) => {
       admitted("foreground");
       return clients.search(signal);
     }, stop);
+    output.search = search;
     result.search += 1;
     const analytics = await permit((signal) => {
       admitted("foreground");
       return clients.analytics(signal);
     }, stop);
+    output.analytics = analytics;
     result.analytics += 1;
-    return { analytics, search };
+    return output;
   },
   http: () => {
     const group = ["app", "web", "docs", "api"][result.http % 4];
@@ -369,6 +371,8 @@ export const runLoad = async (phase, clients, stop) => {
   const scheduleKey = clients.schedule ?? clients;
   if (!loadSchedules.has(scheduleKey)) {
     loadSchedules.set(scheduleKey, {
+      admission: new AbortController(),
+      failure: undefined,
       next: {
         foreground: 0,
         http: 0,
@@ -379,7 +383,13 @@ export const runLoad = async (phase, clients, stop) => {
       permit: clients.foreground ?? createForegroundPermit(),
     });
   }
-  const { next, permit } = loadSchedules.get(scheduleKey);
+  const schedule = loadSchedules.get(scheduleKey);
+  const { next, permit } = schedule;
+  const admission = AbortSignal.any([stop, schedule.admission.signal]);
+  const fail = (error) => {
+    schedule.failure ??= error;
+    schedule.admission.abort();
+  };
   const intervals = {
     foreground: 10_000,
     http: phase.http_rps ? 1000 / phase.http_rps : Infinity,
@@ -388,6 +398,7 @@ export const runLoad = async (phase, clients, stop) => {
     workflow: 10_000,
   };
   const admitted = (kind) => {
+    admission.throwIfAborted();
     next[kind] = now() + intervals[kind];
   };
   const result = {
@@ -400,7 +411,7 @@ export const runLoad = async (phase, clients, stop) => {
     telemetry_accepted: 0,
     workflows: 0,
   };
-  const state = { failure: undefined, sequence: 0 };
+  const state = { sequence: 0 };
   const active = new Map();
   const emit = (event) => {
     state.sequence += 1;
@@ -415,20 +426,22 @@ export const runLoad = async (phase, clients, stop) => {
   const operations = phaseOperations(
     clients,
     result,
-    stop,
+    admission,
     emit,
     permit,
     admitted
   );
   const launch = (kind) => {
     let acceptedAt = new Date().toISOString();
+    const partialOutput = {};
     const task = (async () => {
       try {
+        admission.throwIfAborted();
         await emit({ accepted_at: acceptedAt, kind, outcome: "submitted" });
-        stop.throwIfAborted();
+        admission.throwIfAborted();
         acceptedAt = new Date().toISOString();
         admitted(kind);
-        const output = await operations[kind]();
+        const output = await operations[kind](partialOutput);
         await emit({
           accepted_at: acceptedAt,
           completed_at: new Date().toISOString(),
@@ -437,18 +450,20 @@ export const runLoad = async (phase, clients, stop) => {
           ...output,
         });
       } catch (error) {
-        if (!stopped(stop) || error.name !== "AbortError") {
-          state.failure ??= error;
+        const cancelled = stopped(admission) && error.name === "AbortError";
+        if (!cancelled) {
+          fail(error);
         }
         try {
           await emit({
             accepted_at: acceptedAt,
             completed_at: new Date().toISOString(),
             kind,
-            outcome: stopped(stop) ? "cancelled" : "failed",
+            outcome: cancelled ? "cancelled" : "failed",
+            ...partialOutput,
           });
         } catch (persistError) {
-          state.failure ??= persistError;
+          fail(persistError);
         }
       } finally {
         active.delete(kind);
@@ -459,8 +474,8 @@ export const runLoad = async (phase, clients, stop) => {
   /* eslint-disable no-await-in-loop -- Admission is a paced stream; parallelizing iterations would create an unbounded request queue. */
   while (
     now() - start < phase.duration_ms &&
-    !stopped(stop) &&
-    !state.failure
+    !stopped(admission) &&
+    !schedule.failure
   ) {
     const elapsed = now();
     for (const [kind, interval] of [
@@ -470,6 +485,9 @@ export const runLoad = async (phase, clients, stop) => {
       ["foreground", intervals.foreground],
       ["workflow", intervals.workflow],
     ]) {
+      if (stopped(admission)) {
+        break;
+      }
       if (phase.http_rps === 0 || elapsed < next[kind]) {
         continue;
       }
@@ -493,18 +511,18 @@ export const runLoad = async (phase, clients, stop) => {
               .map((value) => value - now())
           )
         ),
-        stop
+        admission
       );
     } catch (error) {
-      if (!stopped(stop)) {
-        throw error;
+      if (!stopped(admission) || error.name !== "AbortError") {
+        fail(error);
       }
     }
   }
   /* eslint-enable no-await-in-loop */
   await Promise.all(active.values());
-  if (state.failure) {
-    throw state.failure;
+  if (schedule.failure) {
+    throw schedule.failure;
   }
   return result;
 };
