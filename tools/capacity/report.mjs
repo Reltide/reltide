@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -30,7 +31,7 @@ const components = [
 // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Public evaluator boundary validates untrusted JSON fields before classification.
 const string = (v) => typeof v === "string";
 // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Reject non-object records at the public evidence boundary.
-const record = (v) => v !== null && typeof v === "object";
+const record = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const mib = 1024 ** 2;
 const finite = (n) => Number.isFinite(n) && n >= 0;
 const integer = (n) => finite(n) && Number.isSafeInteger(n);
@@ -41,6 +42,10 @@ const utc = (s) =>
 const hash = (s) => string(s) && /^(?:sha256:)?[a-f0-9]{64}$/u.test(s);
 const runId = (s) => string(s) && /^[a-z0-9-]{1,64}$/u.test(s);
 const list = (v) => (Array.isArray(v) ? v : []);
+const records = (s, values, reason) => {
+  s.need(Array.isArray(values) && values.every(record), reason);
+  return list(values).filter(record);
+};
 const combine = (values) => {
   if (values.includes("FAIL")) {
     return "FAIL";
@@ -167,7 +172,7 @@ const containerSample = (s, e, x, prev, c) => {
       [true, false].includes(c.oom),
     "partial container metrics"
   );
-  const before = prev?.containers?.find((v) => v.service === c.service);
+  const before = list(prev?.containers).find((v) => v?.service === c.service);
   const disruption =
     (c.running === false ||
       (before
@@ -296,7 +301,7 @@ const hostEvidence = (s, e, metrics) => {
   };
   for (const [i, x] of samples.entries()) {
     const prev = samples[i - 1];
-    const cs = list(x.containers).filter((v) => v && record(v));
+    const cs = records(s, x.containers, "malformed container observations");
     hostSample(s, e, x, prev, cs);
     if (!prev) {
       continue;
@@ -319,13 +324,25 @@ const hostEvidence = (s, e, metrics) => {
     "host samples truncated"
   );
   metrics.resource_windows = peaks;
-  for (const c of list(e.integration?.containers)) {
+  for (const c of records(
+    s,
+    e.integration?.containers ?? [],
+    "malformed integration containers"
+  )) {
     s.fail(c.oom === true, "OOM detected");
     s.fail(c.restart_count > 0, "unexpected integration restart");
   }
 };
+const phaseDuration = (s, p) => {
+  s.fail(
+    integer(p?.duration_ms) &&
+      finite(duration(p?.started_at, p?.completed_at)) &&
+      p.duration_ms !== duration(p.started_at, p.completed_at),
+    "phase duration contradicts UTC interval"
+  );
+};
 const phaseEvidence = (s, e) => {
-  const phases = list(e.manifest?.phases);
+  const phases = records(s, e.manifest?.phases, "malformed phase observations");
   const expected = [
     ["idle", 900_000, 0],
     ["ramp-1", 600_000, 1],
@@ -345,6 +362,7 @@ const phaseEvidence = (s, e) => {
         duration(p.started_at, p.completed_at) >= ms,
       "phase duration/rate incomplete"
     );
+    phaseDuration(s, p);
     if (i && p) {
       s.need(
         phases[i - 1]?.completed_at === p.started_at,
@@ -444,11 +462,17 @@ const workloadMetrics = (s, e, metrics) => {
   const telemetry = list(e.events).filter(
     (v) =>
       v.kind === "telemetry_stored" &&
-      list(e.manifest?.phases).some((p) => p.name === v.phase && p.http_rps > 0)
+      list(e.manifest?.phases).some(
+        (p) => p?.name === v.phase && p.http_rps > 0
+      )
   );
   const lags = [];
   for (const v of telemetry) {
-    for (const proof of list(v.proofs)) {
+    for (const proof of records(
+      s,
+      v.proofs,
+      "telemetry storage proof malformed"
+    )) {
       const lag = Date.parse(proof.stored_at) - proof.event_time_ms?.[0];
       s.need(finite(lag), "telemetry search timing missing");
       s.fail(
@@ -529,14 +553,106 @@ const producerCounters = (s, e) => {
     previous = current;
   }
 };
+const phaseCoverage = (s, p, rows, count, rate) => {
+  const start = Date.parse(p.started_at);
+  const end = Date.parse(p.completed_at);
+  const bins = new Map();
+  let total = 0;
+  const admissions = [];
+  for (const v of rows) {
+    const admitted = Date.parse(v.accepted_at);
+    const completed = Date.parse(v.completed_at);
+    const timed = utc(v.accepted_at) && utc(v.completed_at);
+    s.need(timed, "phase observation UTC missing");
+    const inside =
+      timed &&
+      admitted >= start &&
+      admitted < end &&
+      completed >= admitted &&
+      completed <= end;
+    s.fail(
+      timed && finite(end - start) && !inside,
+      "observation contradicts declared phase interval"
+    );
+    s.need(integer(count(v)), "phase observation count missing");
+    if (!inside || !integer(count(v))) {
+      continue;
+    }
+    const bin = Math.floor((admitted - start) / 60_000);
+    bins.set(bin, (bins.get(bin) ?? 0) + count(v));
+    total += count(v);
+    admissions.push({ at: admitted, count: count(v) });
+  }
+  admissions.sort((a, b) => a.at - b.at);
+  let left = 0;
+  let active = 0;
+  for (const [i, v] of admissions.entries()) {
+    active += v.count;
+    while (left < i && admissions[left].at <= v.at - 1000) {
+      active -= admissions[left].count;
+      left += 1;
+    }
+    s.fail(active > rate, "phase admission rate exceeds prescribed bound");
+  }
+  let sustained = finite(end - start) && end > start;
+  for (let offset = 0; sustained && offset < end - start; offset += 60_000) {
+    sustained =
+      (bins.get(offset / 60_000) ?? 0) >=
+      (Math.min(60_000, end - start - offset) * rate) / 1000;
+  }
+  s.need(sustained, "sustained phase admissions incomplete");
+  return total;
+};
+const phaseStorage = (s, p, events) => {
+  for (const v of events.filter((event) => event.kind === "telemetry_stored")) {
+    s.need(utc(v.completed_at), "phase storage completion UTC missing");
+    const start = Date.parse(p.started_at);
+    const end = Date.parse(p.completed_at);
+    for (const proof of records(
+      s,
+      v.proofs,
+      "telemetry storage proof malformed"
+    )) {
+      s.fail(
+        finite(end - start) &&
+          ((utc(v.completed_at) &&
+            (Date.parse(v.completed_at) < start ||
+              Date.parse(v.completed_at) > end)) ||
+            (integer(proof.event_time_ms?.[0]) &&
+              proof.event_time_ms[0] < start) ||
+            (integer(proof.event_time_ms?.[1]) &&
+              proof.event_time_ms[1] >= end) ||
+            (utc(proof.stored_at) &&
+              utc(v.completed_at) &&
+              Date.parse(proof.stored_at) > Date.parse(v.completed_at))),
+        "storage observation contradicts declared phase interval"
+      );
+    }
+  }
+};
 const measuredCoverage = (s, e, metrics) => {
   metrics.phase_counts = [];
-  for (const p of list(e.manifest?.phases)) {
+  for (const p of records(
+    s,
+    e.manifest?.phases,
+    "malformed phase observations"
+  )) {
     const events = list(e.events).filter((v) => v.phase === p.name);
-    const http = events.filter(
-      (v) => v.kind === "http" && v.outcome === "completed"
-    ).length;
-    const telemetry = events
+    const http = phaseCoverage(
+      s,
+      p,
+      events.filter((v) => v.kind === "http" && v.outcome === "completed"),
+      () => 1,
+      p.http_rps
+    );
+    const telemetry = phaseCoverage(
+      s,
+      p,
+      events.filter((v) => v.kind === "telemetry_accepted"),
+      (v) => v.accepted,
+      p.http_rps > 0 ? 10 : 0
+    );
+    const stored = events
       .filter((v) => v.kind === "telemetry_stored")
       .reduce((sum, v) => sum + (integer(v.stored) ? v.stored : 0), 0);
     s.need(
@@ -547,6 +663,18 @@ const measuredCoverage = (s, e, metrics) => {
       p.http_rps === 0 || telemetry >= p.duration_ms / 100,
       "realized phase telemetry coverage incomplete"
     );
+    s.need(
+      p.http_rps === 0 || stored === telemetry,
+      "phase telemetry storage coverage incomplete"
+    );
+    const admitted = events.filter((v) => v.kind === "telemetry_accepted");
+    s.fail(
+      admitted.length > 0 &&
+        admitted.every((v) => integer(v.accepted)) &&
+        stored > admitted.reduce((sum, v) => sum + v.accepted, 0),
+      "phase storage exceeds measured admissions"
+    );
+    phaseStorage(s, p, events);
     metrics.phase_counts.push({
       http,
       phase: ["idle", "ramp-1", "ramp-3", "ramp-5", "soak", "final"].includes(
@@ -572,12 +700,105 @@ const measuredCoverage = (s, e, metrics) => {
     s.need(accepted === count, "prescribed seed coverage incomplete");
   }
 };
-const realPushdown = (plan, fixture) => {
-  if (!plan || !record(plan)) {
-    return false;
+const proofMeasurements = (s, proofs, cohort) => {
+  for (const proof of proofs) {
+    const times = list(proof.event_time_ms);
+    s.need(
+      times.length === 2 &&
+        times.every(integer) &&
+        utc(proof.stored_at) &&
+        integer(proof.checksum_errors),
+      "storage proof measurement missing"
+    );
+    s.fail(
+      proof.checksum_errors > 0 ||
+        (times.every(integer) &&
+          times.length === 2 &&
+          (times[1] < times[0] || Date.parse(proof.stored_at) < times[1])),
+      "storage proof measurement contradicts event time"
+    );
+    if (integer(times[1])) {
+      cohort.event_time = Math.max(cohort.event_time, times[1]);
+    }
+    if (utc(proof.stored_at)) {
+      cohort.stored_at = Math.max(
+        cohort.stored_at,
+        Date.parse(proof.stored_at)
+      );
+    }
   }
+};
+const telemetryCounts = (s, e) => {
+  const cohorts = new Map();
+  let stored = 0;
+  let complete = list(e.events).some((v) => v.kind === "telemetry_stored");
+  s.need(complete, "telemetry storage observations missing");
+  for (const v of list(e.events).filter((event) =>
+    ["telemetry_accepted", "telemetry_stored"].includes(event.kind)
+  )) {
+    const key = ["current", "aged", "boundary", "steady"].includes(v.cohort)
+      ? v.cohort
+      : undefined;
+    s.need(key, "telemetry cohort relationship missing");
+    const cohort = cohorts.get(key) ?? {
+      accepted: 0,
+      admission_complete: true,
+      admissions: 0,
+      complete: true,
+      event_time: 0,
+      stored: 0,
+      stored_at: 0,
+    };
+    if (v.kind === "telemetry_accepted") {
+      s.need(integer(v.accepted), "telemetry admission count missing");
+      cohort.admission_complete &&= integer(v.accepted);
+      if (integer(v.accepted)) {
+        cohort.accepted += v.accepted;
+        cohort.admissions += 1;
+      }
+    } else {
+      const proofs = records(s, v.proofs, "telemetry storage proof malformed");
+      const measured =
+        proofs.length > 0 &&
+        proofs.length === list(v.proofs).length &&
+        proofs.every((p) => integer(p.rows));
+      const counted = measured && integer(v.stored);
+      s.need(counted, "telemetry storage row count missing");
+      complete &&= counted;
+      cohort.complete &&= counted;
+      const rows = proofs.reduce(
+        (sum, p) => sum + (integer(p.rows) ? p.rows : 0),
+        0
+      );
+      s.fail(
+        measured && integer(v.stored) && rows !== v.stored,
+        "storage proof contradicts stored event total"
+      );
+      proofMeasurements(s, proofs, cohort);
+      if (measured) {
+        stored += rows;
+        cohort.stored += rows;
+      }
+    }
+    cohorts.set(key, cohort);
+  }
+  for (const [key, c] of cohorts) {
+    if (key) {
+      s.need(c.admissions > 0, "cohort admission evidence missing");
+      s.fail(
+        c.admission_complete && c.admissions > 0 && c.stored > c.accepted,
+        "cohort storage exceeds admitted rows"
+      );
+    }
+  }
+  return { cohorts, complete, stored };
+};
+const realPushdown = (plan, fixture) => {
   if (Array.isArray(plan)) {
     return plan.some((v) => realPushdown(v, fixture));
+  }
+  if (!record(plan)) {
+    return false;
   }
   if (plan["Node Type"] === "Aggregate") {
     return false;
@@ -630,13 +851,15 @@ const analyticsOutput = (s, v, fixture) => {
         !realPushdown(v.explain, fixture)),
     "false or failed pushdown claim"
   );
-  s.need(Array.isArray(v.sample), "analytics type mapping missing");
+  records(s, v.sample, "analytics type mapping missing");
   s.fail(
     Array.isArray(v.sample) &&
       (v.sample.length !== 10 ||
         v.sample.some(
           (row, i) =>
-            (runId(fixture) && row.run_id !== fixture) || row.sequence !== i + 1
+            record(row) &&
+            ((runId(fixture) && row.run_id !== fixture) ||
+              row.sequence !== i + 1)
         )),
     "analytics type mapping or run mismatch"
   );
@@ -648,6 +871,23 @@ const analyticsOutput = (s, v, fixture) => {
     (v.library_version !== undefined && v.library_version !== "0.10.0") ||
       (v.sql_version !== undefined && v.sql_version !== "0.10"),
     "extension version mismatch"
+  );
+};
+const searchResult = (s, e, search) => {
+  s.need(
+    integer(search.rows) &&
+      string(search.saved_search_id) &&
+      search.saved_search_id.length > 0 &&
+      hash(search.first_id),
+    "HyperDX result evidence missing"
+  );
+  const expected = createHash("sha256")
+    .update(`${e.run_id}:current:1`)
+    .digest("hex");
+  s.fail(
+    (integer(search.rows) && search.rows === 0) ||
+      (search.first_id !== undefined && search.first_id !== expected),
+    "HyperDX result contradicts telemetry fixture"
   );
 };
 const analyticsEvidence = (s, e, metrics) => {
@@ -672,6 +912,7 @@ const analyticsEvidence = (s, e, metrics) => {
     }
     if (v.search) {
       searches.push(v.search);
+      searchResult(s, e, v.search);
     }
   }
   s.need(outputs.length > 0, "analytics output missing");
@@ -706,7 +947,7 @@ const ordinaryRetention = (s, e, metrics) => {
     (v) => v.kind === "ordinary_expiry_verified"
   );
   s.need(before && after, "ordinary expiry evidence incomplete");
-  const inventory = list(e.retention?.tables);
+  const inventory = records(s, e.retention?.tables, "malformed TTL inventory");
   const names = [
     "otel_logs",
     "otel_traces",
@@ -748,11 +989,15 @@ const ordinaryRetention = (s, e, metrics) => {
   const baseline = before.retention;
   s.need(
     list(baseline?.ttls).length === 2 &&
-      list(baseline?.mutations).every((v) => Number(v.is_done) === 1),
+      records(s, baseline?.mutations, "malformed retention mutations").every(
+        (v) => Number(v.is_done) === 1
+      ),
     "ordinary TTL baseline incomplete"
   );
   s.fail(
-    list(baseline?.ttls).some((v) => !/TTL .*toIntervalDay\(3\)/u.test(v.ddl)),
+    records(s, baseline?.ttls, "malformed retention DDL").some(
+      (v) => !/TTL .*toIntervalDay\(3\)/u.test(v.ddl)
+    ),
     "ordinary baseline TTL is not three days"
   );
   s.fail(
@@ -806,9 +1051,125 @@ const restoreCompatibility = (s, r, receipts) => {
     "restore RTO contradicts measured interval"
   );
 };
+const expiryObservations = (s, counts, observations) => {
+  let complete = true;
+  let before;
+  let zero;
+  for (const v of observations) {
+    s.need(
+      integer(v.remaining) && utc(v.observed_at),
+      "cohort expiry observation missing"
+    );
+    complete &&= integer(v.remaining) && utc(v.observed_at);
+    s.fail(
+      counts.complete && integer(v.remaining) && v.remaining > counts.stored,
+      "expiry count exceeds measured cohort storage"
+    );
+    if (before) {
+      s.fail(
+        Date.parse(v.observed_at) < Date.parse(before.observed_at) ||
+          v.remaining > before.remaining,
+        "cohort expiry observations contradict continuity"
+      );
+    }
+    if (v.remaining === 0 && utc(v.observed_at)) {
+      zero = v;
+    }
+    before = v;
+  }
+  return { complete, zero };
+};
+const expiryCounts = (s, e, cohorts) => {
+  let total = 0;
+  let complete = cohorts.size > 0 && !cohorts.has(undefined);
+  for (const [cohort, counts] of cohorts) {
+    complete &&= counts.complete;
+    const observations = list(e.events).filter(
+      (v) => v.kind === "normal_expiry_observation" && v.cohort === cohort
+    );
+    const observed = expiryObservations(s, counts, observations);
+    complete &&= observed.complete;
+    const { zero } = observed;
+    if (!zero) {
+      if (["aged", "boundary"].includes(cohort)) {
+        complete = false;
+      }
+      continue;
+    }
+    if (!counts.complete) {
+      continue;
+    }
+    const expiredAt = counts.event_time + 3 * 86_400_000;
+    s.fail(
+      Date.parse(zero.observed_at) < expiredAt ||
+        Date.parse(zero.observed_at) < counts.stored_at,
+      "cohort expiry precedes measured retention boundary"
+    );
+    total += counts.stored;
+    if (cohort === "boundary") {
+      const verified = list(e.events).find(
+        (v) => v.kind === "ordinary_expiry_verified"
+      );
+      s.need(integer(verified?.expired), "ordinary expiry count missing");
+      s.fail(
+        integer(verified?.expired) && verified.expired !== counts.stored,
+        "ordinary expiry contradicts measured cohort storage"
+      );
+      s.need(
+        observations.some(
+          (v) =>
+            v.remaining === counts.stored &&
+            Date.parse(v.observed_at) < expiredAt
+        ),
+        "ordinary expiry initial cohort count missing"
+      );
+    }
+  }
+  return complete ? total : undefined;
+};
+const accountingRows = (s, e, a, counts, expired) => {
+  const admissions = list(e.events).filter(
+    (v) => v.kind === "telemetry_accepted"
+  );
+  const accepted = admissions.reduce(
+    (sum, v) => sum + (integer(v.accepted) ? v.accepted : 0),
+    0
+  );
+  s.fail(
+    admissions.length > 0 &&
+      admissions.every((v) => integer(v.accepted)) &&
+      integer(a.accepted) &&
+      a.accepted !== accepted,
+    "accounting contradicts accepted event totals"
+  );
+  s.fail(a.dropped > 0, "accounted drops");
+  s.fail(
+    counts.complete &&
+      integer(a.stored) &&
+      integer(a.expired) &&
+      a.stored + a.expired !== counts.stored,
+    "accounting contradicts measured storage totals"
+  );
+  s.need(expired !== undefined, "cohort expiry accounting incomplete");
+  s.fail(
+    expired !== undefined && integer(a.expired) && a.expired !== expired,
+    "accounting contradicts observed cohort expiry"
+  );
+  s.fail(
+    integer(a.accepted) &&
+      integer(a.stored) &&
+      integer(a.expired) &&
+      integer(a.pending) &&
+      a.accepted !== a.stored + a.expired + a.pending + a.dropped,
+    "telemetry accounting mismatch"
+  );
+  s.need(a.pending === 0, "telemetry still pending");
+};
 const retentionEvidence = (s, e, metrics) => {
   const load = e.integration?.load ?? e.load;
   const a = load?.accounting;
+  const counts = telemetryCounts(s, e);
+  const expired = expiryCounts(s, e, counts.cohorts);
   s.need(
     a &&
       [
@@ -822,27 +1183,7 @@ const retentionEvidence = (s, e, metrics) => {
     "telemetry accounting missing"
   );
   if (a) {
-    const admissions = list(e.events).filter(
-      (v) => v.kind === "telemetry_accepted"
-    );
-    const accepted = admissions.reduce(
-      (sum, v) => sum + (integer(v.accepted) ? v.accepted : 0),
-      0
-    );
-    s.fail(
-      admissions.length > 0 && integer(a.accepted) && a.accepted !== accepted,
-      "accounting contradicts accepted event totals"
-    );
-    s.fail(a.dropped > 0, "accounted drops");
-    s.fail(
-      integer(a.accepted) &&
-        integer(a.stored) &&
-        integer(a.expired) &&
-        integer(a.pending) &&
-        a.accepted !== a.stored + a.expired + a.pending + a.dropped,
-      "telemetry accounting mismatch"
-    );
-    s.need(a.pending === 0, "telemetry still pending");
+    accountingRows(s, e, a, counts, expired);
     metrics.accounting = Object.fromEntries(
       [
         "accepted",
@@ -1198,6 +1539,7 @@ const evaluate = (input = {}) => {
       hostEvidence,
       httpMetrics,
       workloadMetrics,
+      telemetryCounts,
       measuredCoverage,
       producerCounters,
       operationContinuity,

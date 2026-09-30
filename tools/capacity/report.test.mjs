@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -98,8 +99,8 @@ const fixture = () => {
     utc: at(i * 1000),
   }));
   const events = services.slice(0, 4).map((service, i) => ({
-    accepted_at: at(3_000_000),
-    completed_at: at(3_000_500),
+    accepted_at: at(3_000_000 + i * 200),
+    completed_at: at(3_000_500 + i * 200),
     kind: "http",
     outcome: "completed",
     phase: "soak",
@@ -119,7 +120,7 @@ const fixture = () => {
       run_id: id,
       search: {
         elapsed_ms: 2000,
-        first_id: sha,
+        first_id: createHash("sha256").update(`${id}:current:1`).digest("hex"),
         rows: 1,
         saved_search_id: "unit",
       },
@@ -137,6 +138,7 @@ const fixture = () => {
     },
     {
       accepted_at: at(3_000_000),
+      cohort: "steady",
       completed_at: at(3_030_000),
       kind: "telemetry_stored",
       phase: "soak",
@@ -154,13 +156,20 @@ const fixture = () => {
     }
   );
   for (const phase of phaseRecords.filter((p) => p.http_rps > 0)) {
+    const start = Date.parse(phase.started_at);
     for (let i = 0; i < (phase.duration_ms * phase.http_rps) / 1000; i += 1) {
+      const ms = start + (i * 1000) / phase.http_rps;
+      if (
+        phase.name === "soak" &&
+        ms >= Date.parse(at(3_000_000)) &&
+        ms < Date.parse(at(3_000_800))
+      ) {
+        continue;
+      }
       const service = services[i % 4];
       events.push({
-        accepted_at: phase.started_at,
-        completed_at: new Date(
-          Date.parse(phase.started_at) + 100
-        ).toISOString(),
+        accepted_at: new Date(ms).toISOString(),
+        completed_at: new Date(ms + 100).toISOString(),
         kind: "http",
         outcome: "completed",
         phase: phase.name,
@@ -169,37 +178,81 @@ const fixture = () => {
         url: `http://${service}/bulk`,
       });
     }
-    events.push({
-      kind: "telemetry_stored",
-      phase: phase.name,
-      proofs: [
-        {
-          checksum_errors: 0,
-          event_time_ms: [
-            Date.parse(phase.completed_at) - 1000,
-            Date.parse(phase.completed_at) - 1,
-          ],
-          rows: phase.duration_ms / 100,
-          stored_at: phase.completed_at,
-        },
-      ],
-      run_id: id,
-      stored: phase.duration_ms / 100,
-    });
+    for (let offset = 0; offset < phase.duration_ms; offset += 1000) {
+      const ms = start + offset;
+      events.push({
+        accepted: 10,
+        accepted_at: new Date(ms).toISOString(),
+        cohort: "steady",
+        completed_at: new Date(ms + 1).toISOString(),
+        kind: "telemetry_accepted",
+        phase: phase.name,
+        rejected: 0,
+        run_id: id,
+      });
+      if (ms === Date.parse(at(3_000_000))) {
+        continue;
+      }
+      events.push({
+        cohort: "steady",
+        completed_at: new Date(ms + 100).toISOString(),
+        kind: "telemetry_stored",
+        phase: phase.name,
+        proofs: [
+          {
+            checksum_errors: 0,
+            event_time_ms: [ms, ms + 45],
+            rows: 10,
+            stored_at: new Date(ms + 100).toISOString(),
+          },
+        ],
+        run_id: id,
+        stored: 10,
+      });
+    }
   }
   for (const [cohort, count] of [
     ["current", 2_592_000],
     ["aged", 25_920],
+    ["boundary", 20],
   ]) {
+    const eventTime = Date.parse(
+      at(
+        cohort === "current"
+          ? -60_000
+          : -3 * 86_400_000 + (cohort === "boundary" ? 2000 : -60_000)
+      )
+    );
     for (let offset = 0; offset < count; offset += 256) {
-      events.push({
-        accepted: Math.min(256, count - offset),
-        cohort,
-        kind: "telemetry_accepted",
-        phase: "seed",
-        rejected: 0,
-        run_id: id,
-      });
+      const rows = Math.min(256, count - offset);
+      events.push(
+        {
+          accepted: rows,
+          accepted_at: at(-30_000),
+          cohort,
+          completed_at: at(-29_999),
+          kind: "telemetry_accepted",
+          phase: "seed",
+          rejected: 0,
+          run_id: id,
+        },
+        {
+          cohort,
+          completed_at: at(-20_000),
+          kind: "telemetry_stored",
+          phase: "seed",
+          proofs: [
+            {
+              checksum_errors: 0,
+              event_time_ms: [eventTime, eventTime],
+              rows,
+              stored_at: at(-20_000),
+            },
+          ],
+          run_id: id,
+          stored: rows,
+        }
+      );
     }
   }
   const retention = {
@@ -214,6 +267,13 @@ const fixture = () => {
       kind: "ordinary_expiry_baseline",
       last_event_expired_after: at(2000),
       retention,
+      run_id: id,
+    },
+    {
+      cohort: "aged",
+      kind: "normal_expiry_observation",
+      observed_at: at(0),
+      remaining: 0,
       run_id: id,
     },
     {
@@ -296,12 +356,12 @@ const fixture = () => {
     host_samples,
     load: {
       accounting: {
-        accepted: 2_617_920,
+        accepted: 2_716_940,
         dropped: 0,
-        expired: 0,
+        expired: 25_940,
         pending: 0,
         service_generated: 0,
-        stored: 2_617_920,
+        stored: 2_691_000,
       },
       projection: {
         label: "growth projection, not measured three-day capacity",
@@ -873,4 +933,199 @@ test("reported RPO cannot understate the retained commit watermark loss", () => 
   const e = fixture();
   e.restores[0].rpo_seconds = 0;
   assert.equal(evaluateRun(e).recovery, "FAIL");
+});
+
+test("round 1 malformed containers cannot hide a later OOM", () => {
+  const e = fixture();
+  e.host_samples[0].containers.unshift(null);
+  e.host_samples[100].oom_count = 1;
+  assert.equal(evaluateRun(e).combined, "FAIL");
+});
+test("round 1 malformed analytics sample cannot hide latency failure", () => {
+  const e = fixture();
+  const output = e.events.find((v) => v.analytics).analytics;
+  output.sample[0] = null;
+  output.elapsed_ms = 2001;
+  assert.equal(evaluateRun(e).analytics, "FAIL");
+});
+test("round 1 missing nested observations block while later guards survive", () => {
+  const e = fixture();
+  e.events.find((v) => v.proofs).proofs.unshift(null);
+  e.events.push({
+    guard: { stop: true },
+    kind: "guard_trigger",
+    run_id: id,
+    sequence: e.events.length + 1,
+  });
+  assert.equal(evaluateRun(e).capacity, "FAIL");
+});
+test("round 1 HTTP phase labels cannot cover observations outside the experiment", () => {
+  const e = fixture();
+  for (const v of e.events.filter((event) => event.kind === "http")) {
+    v.accepted_at = "2026-10-02T00:00:00.000Z";
+    v.completed_at = "2026-10-02T00:00:00.100Z";
+  }
+  assert.equal(evaluateRun(e).capacity, "FAIL");
+});
+test("round 1 one burst exceeds prescribed admission rate", () => {
+  const e = fixture();
+  for (const v of e.events.filter((event) => event.kind === "http")) {
+    const p = e.manifest.phases.find((phase) => phase.name === v.phase);
+    v.accepted_at = p.started_at;
+    v.completed_at = new Date(Date.parse(p.started_at) + 100).toISOString();
+  }
+  assert.equal(evaluateRun(e).capacity, "FAIL");
+});
+test("round 1 declared duration must agree with measured UTC interval", () => {
+  const e = fixture();
+  e.manifest.phases[0].duration_ms += 1000;
+  assert.equal(evaluateRun(e).capacity, "FAIL");
+});
+test("round 1 zero measured storage rows contradict positive stored totals", () => {
+  const e = fixture();
+  for (const v of e.events.filter(
+    (event) => event.kind === "telemetry_stored"
+  )) {
+    for (const p of v.proofs) {
+      p.rows = 0;
+    }
+  }
+  assert.equal(evaluateRun(e).combined, "FAIL");
+});
+test("round 1 absent storage proof count stays incomplete", () => {
+  const e = fixture();
+  delete e.events.find((v) => v.proofs).proofs[0].rows;
+  assert.equal(evaluateRun(e).combined, "BLOCKED");
+});
+test("round 1 accounting cannot relabel retained telemetry as expired", () => {
+  const e = fixture();
+  e.load.accounting.expired = e.load.accounting.accepted;
+  e.load.accounting.stored = 0;
+  assert.equal(evaluateRun(e).retention, "FAIL");
+});
+test("round 1 expiry claim must match its observed cohort decrease", () => {
+  const e = fixture();
+  e.events.find((v) => v.kind === "ordinary_expiry_verified").expired += 1;
+  assert.equal(evaluateRun(e).retention, "FAIL");
+});
+test("round 1 HyperDX zero rows and wrong fixture identity fail", () => {
+  for (const update of [{ rows: 0 }, { first_id: "f".repeat(64) }]) {
+    const e = fixture();
+    Object.assign(e.events.find((v) => v.search).search, update);
+    assert.equal(evaluateRun(e).analytics, "FAIL");
+  }
+});
+test("round 1 HyperDX missing result identifiers remains incomplete", () => {
+  for (const field of ["first_id", "saved_search_id", "rows"]) {
+    const e = fixture();
+    e.events.find((v) => v.search).search[field] = undefined;
+    assert.equal(evaluateRun(e).analytics, "BLOCKED");
+  }
+});
+test("round 1 malformed nested samples alone remain incomplete", () => {
+  const e = fixture();
+  e.host_samples[0].containers.unshift(null);
+  e.events.find((v) => v.analytics).analytics.sample[0] = null;
+  assert.equal(evaluateRun(e).combined, "BLOCKED");
+});
+test("round 1 storage completion and event times must belong to their phase", () => {
+  for (const change of [
+    (v) => {
+      v.completed_at = at(0);
+    },
+    (v) => {
+      v.proofs[0].event_time_ms = [Date.parse(at(0)), Date.parse(at(1))];
+    },
+  ]) {
+    const e = fixture();
+    change(e.events.find((v) => v.kind === "telemetry_stored"));
+    assert.equal(evaluateRun(e).capacity, "FAIL");
+  }
+});
+test("round 1 missing cohort expiry observations remain incomplete", () => {
+  const e = fixture();
+  e.events = e.events.filter((v) => v.kind !== "normal_expiry_observation");
+  for (const [i, v] of e.events.entries()) {
+    v.sequence = i + 1;
+  }
+  assert.equal(evaluateRun(e).retention, "BLOCKED");
+});
+test("round 1 minute totals cannot hide a one-second admission burst", () => {
+  const e = fixture();
+  for (const v of e.events.filter((event) => event.kind === "http")) {
+    const start = Date.parse(
+      e.manifest.phases.find((p) => p.name === v.phase).started_at
+    );
+    const burst =
+      start + Math.floor((Date.parse(v.accepted_at) - start) / 60_000) * 60_000;
+    v.accepted_at = new Date(burst).toISOString();
+    v.completed_at = new Date(burst + 100).toISOString();
+  }
+  assert.equal(evaluateRun(e).capacity, "FAIL");
+});
+test("round 1 a missing measured minute is incomplete without an invented failure", () => {
+  const e = fixture();
+  e.events = e.events.filter(
+    (v) =>
+      v.kind !== "http" ||
+      Date.parse(v.accepted_at) < Date.parse(at(3_060_000)) ||
+      Date.parse(v.accepted_at) >= Date.parse(at(3_120_000))
+  );
+  for (const [i, v] of e.events.entries()) {
+    v.sequence = i + 1;
+  }
+  assert.equal(evaluateRun(e).capacity, "BLOCKED");
+});
+test("round 1 missing cohort storage counts do not fabricate expiry contradictions", () => {
+  const e = fixture();
+  delete e.events.find(
+    (v) => v.kind === "telemetry_stored" && v.cohort === "boundary"
+  ).proofs[0].rows;
+  assert.equal(evaluateRun(e).combined, "BLOCKED");
+});
+test("round 1 missing phase admission timestamp is incomplete", () => {
+  const e = fixture();
+  delete e.events.find(
+    (v) => v.kind === "telemetry_accepted" && v.phase === "soak"
+  ).accepted_at;
+  assert.equal(evaluateRun(e).capacity, "BLOCKED");
+});
+test("round 1 missing admission counts remain incomplete without contradicting totals", () => {
+  const e = fixture();
+  delete e.events.find(
+    (v) => v.kind === "telemetry_accepted" && v.cohort === "boundary"
+  ).accepted;
+  assert.equal(evaluateRun(e).combined, "BLOCKED");
+});
+test("round 1 telemetry minute totals cannot hide oversized admissions", () => {
+  const e = fixture();
+  for (const v of e.events.filter(
+    (event) => event.kind === "telemetry_accepted" && event.cohort === "steady"
+  )) {
+    const start = Date.parse(
+      e.manifest.phases.find((p) => p.name === v.phase).started_at
+    );
+    const burst =
+      start + Math.floor((Date.parse(v.accepted_at) - start) / 60_000) * 60_000;
+    v.accepted_at = new Date(burst).toISOString();
+    v.completed_at = new Date(burst + 1).toISOString();
+  }
+  assert.equal(evaluateRun(e).capacity, "FAIL");
+});
+test("round 1 HyperDX uses the outer telemetry run separately from analytics", () => {
+  const e = fixture();
+  e.manifest.fixture_run_id = `${id}-analytics`;
+  const output = e.events.find((v) => v.analytics).analytics;
+  output.run_id = e.manifest.fixture_run_id;
+  for (const row of output.sample) {
+    row.run_id = output.run_id;
+  }
+  output.explain[0].Plan["Remote SQL"] = output.explain[0].Plan[
+    "Remote SQL"
+  ].replace(`'${id}'`, `'${output.run_id}'`);
+  assert.equal(evaluateRun(e).analytics, "PASS");
+  e.events.find((v) => v.search).search.first_id = createHash("sha256")
+    .update(`${output.run_id}:current:1`)
+    .digest("hex");
+  assert.equal(evaluateRun(e).analytics, "FAIL");
 });

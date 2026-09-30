@@ -183,10 +183,19 @@ Native `manifest` evidence declares `kind: "native-staging"`, the exact approved
 host identity, image SHA-256 digests by steady-service name, `config_sha256`,
 `fixture_run_id`, frozen endpoint URLs grouped by app/web/docs/api, prescribed
 seed counts, and UTC `phases` (`name`, `started_at`, `completed_at`, `duration_ms`,
-`http_rps`). Phase declarations require realized HTTP and stored-telemetry counts;
-seed admissions require the prescribed current and aged totals. Seed admission
+`http_rps`). Phase declarations require realized HTTP and telemetry admissions/completions inside
+the measured UTC interval, with the declared duration matching that interval.
+Every minute must contain the prescribed workload; rolling one-second admission
+counts must not exceed the phase HTTP rate or ten steady telemetry events. A
+minute-sized burst cannot substitute for sustained load. Stored row totals must
+agree with proof rows and admissions; missing proof counts remain incomplete.
+Seed admissions require the prescribed current and aged totals. Seed admission
 events use the existing `telemetry_accepted` record with `phase: "seed"` and its
-`cohort`. Thirteen steady services are sampled; the transient initializer needs
+`cohort`. Native stored events also carry `cohort` (current, aged, boundary or
+steady), so proof totals and observed expiry can reconcile the final accounting.
+Positive storage, ordinary cohort counts and zero-after-expiry observations must
+agree; declaring rows expired cannot replace those measurements. Current local
+records without cohort relationships remain incomplete. Thirteen steady services are sampled; the transient initializer needs
 a successful check, rather than a continuously running container. Native host
 records retain `parseHostSample` fields, add outer `run_id`/`sequence`, and map
 each container ID to its declared `service`.
@@ -209,7 +218,10 @@ count/range, ordered text/integer sample, remote aggregate/filter pushdown and
 library/SQL pins. A different fixture ID must be explicitly related through
 `manifest.fixture_run_id`; unrelated runs cannot be combined. The native runner
 must add measured `search.elapsed_ms` to the existing foreground search output
-and `scheduling_delay_ms` to workflow completion records. Current local producers
+and `scheduling_delay_ms` to workflow completion records. HyperDX results require
+positive integer `rows`, a nonempty `saved_search_id`, and `first_id` equal to the
+SHA-256 of `${outer_run_id}:current:1`; this telemetry fixture is separate from
+`manifest.fixture_run_id`, which identifies the analytics fixture. Current local producers
 do not supply these separate timings: combined foreground time does not establish
 HyperDX p95, and workflow completion time does not establish scheduling delay.
 HTTP distributions remain separate per frozen endpoint, with counts. Thresholds
