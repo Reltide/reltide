@@ -1,0 +1,90 @@
+# Direct collector mode: no OpAMP supervisor or remote configuration overlay.
+# Three signal queues of 341 items each: 1023 queued events combined (R8).
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  bearertokenauth/capacity:
+    scheme: Bearer
+    token: ${env:CAPACITY_OTLP_TOKEN}
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        auth:
+          authenticator: bearertokenauth/capacity
+      http:
+        endpoint: 0.0.0.0:4318
+        auth:
+          authenticator: bearertokenauth/capacity
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 96
+    spike_limit_mib: 24
+  batch:
+    timeout: 1s
+    send_batch_size: 256
+    send_batch_max_size: 256
+exporters:
+  clickhouse:
+    endpoint: tcp://clickhouse:9000
+    database: otel
+    username: capacity_ingest
+    password: ${env:CAPACITY_CH_INGEST_PASSWORD}
+    create_schema: true
+    ttl: 72h
+    timeout: 5s
+    sending_queue:
+      enabled: true
+      sizer: items
+      queue_size: 341
+      num_consumers: 1
+      block_on_overflow: false
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 2s
+      max_elapsed_time: 10s
+service:
+  extensions:
+    - health_check
+    - bearertokenauth/capacity
+  pipelines:
+    logs:
+      receivers:
+        - otlp
+      processors:
+        - memory_limiter
+        - batch
+      exporters:
+        - clickhouse
+    traces:
+      receivers:
+        - otlp
+      processors:
+        - memory_limiter
+        - batch
+      exporters:
+        - clickhouse
+    metrics:
+      receivers:
+        - otlp
+      processors:
+        - memory_limiter
+        - batch
+      exporters:
+        - clickhouse
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      level: normal
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+                without_type_suffix: true
+                without_units: true

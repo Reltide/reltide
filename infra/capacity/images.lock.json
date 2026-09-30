@@ -1,0 +1,143 @@
+{
+  "platform": "linux/amd64",
+  "inputs": {
+    "node": "node:26.10.0-bookworm-slim@sha256:0a992e1420e2d70611578f1844a6f10a9d11fe6bb535aabf72efe3007f13d79b",
+    "rust": "rust:1.98.1-bookworm@sha256:c49256cbe5ea0188bc658a689500d70c41eb51f009a7a7be209caf60a944f3ec",
+    "debian": "debian:bookworm-slim@sha256:f3034a6ec3c1205360777c4aae76234998866ad18806ae62b63a3f84ccad782b",
+    "application-postgres": "postgres:18.6-bookworm@sha256:9e73daeb439141c2b11eea2463f5f1a3b269fd90d897b41cddb7cb440f21aa5d",
+    "temporal-postgres": "postgres:16.15-bookworm@sha256:efdf07c2f9d4df592783dcc8ea5f6db02efbf5f6452b527225ff5e58364570e9",
+    "temporal": "temporalio/server:1.32.0@sha256:ca47d4de249b9cc28137628dba77ae5e75e8b313ebb5c801c64615c1c99cbb09",
+    "admin": "temporalio/admin-tools:1.32.0@sha256:8bb84e24db4336de48031a66dbda25a7477d300736fe825893e467042135da1f",
+    "temporal-ui": "temporalio/ui:2.54.1@sha256:1f950ff598c810f371c60f1bf16de742caa6b8f60e0cdba05526a434e09b6d43",
+    "hyperdx": "docker.hyperdx.io/hyperdx/hyperdx:2.39.1@sha256:0f88ad527e43f8352f7decc44381c8741c4d5e0122429e95986e14340b98f3dc",
+    "collector": "docker.clickhouse.com/clickhouse/clickstack-otel-collector:2.39.1@sha256:03c4a2066e2e4de3d93c27733742a535924746dd55a7e117ceaff3d1d34e7d19",
+    "mongo": "mongo:8.0.32@sha256:a70d9916fd916ddfdf6fd8552784c599eb26f88c59951c7bcdc50abd158e8be7",
+    "clickhouse": "clickhouse/clickhouse-server:26.9.4.3@sha256:64b4912d43901c1acf1cd0ca7c14fad8b70c7bbd4861ef73bb8b3fb58259cb14",
+    "buildkit": "moby/buildkit:v0.29.0@sha256:a678f07cfe6d0c03c721810e28fc628df91a2f8d2bb93dff353647e70920fbee",
+    "buildkit-amd64": "moby/buildkit:v0.29.0@sha256:e5d9d1763945ca186d48cbf5b0ff3e062eb917fb8a80da6da87144edb7320a90"
+  },
+  "archives": {
+    "age": {
+      "version": "1.3.2",
+      "url": "https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz",
+      "sha256": "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10"
+    },
+    "rclone": {
+      "version": "1.75.1",
+      "url": "https://github.com/rclone/rclone/releases/download/v1.75.1/rclone-v1.75.1-linux-amd64.zip",
+      "sha256": "982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab"
+    }
+  },
+  "extension": {
+    "source_commit": "6ee116efa554c3e39705e2abff776069fef412eb",
+    "library_version": "0.10.0",
+    "sql_version": "0.10",
+    "submodules": {
+      "vendor/pg-clickhouse-c": "473510f6c374edba86e2b632af9624e31a49be63",
+      "vendor/pg-clickhouse-c/clickhouse-c": "4bdd89a02438d1e81ba7cf95dc111af8a23e313b"
+    }
+  },
+  "packages": {
+    "postgresql-server-dev-18": "18.6-1.pgdg12+2",
+    "libcurl4-openssl-dev": "7.88.1-10+deb12u15",
+    "libcurl4": "7.88.1-10+deb12u15",
+    "uuid-dev": "2.38.1-5+deb12u3",
+    "libuuid1": "2.38.1-5+deb12u3",
+    "libssl-dev": "3.0.20-1~deb12u2",
+    "libssl3": "3.0.20-1~deb12u2",
+    "liblz4-dev": "1.9.4-1",
+    "liblz4-1": "1.9.4-1",
+    "libzstd-dev": "1.5.4+dfsg2-5",
+    "libzstd1": "1.5.4+dfsg2-5"
+  },
+  "derived": {
+    "postgres18": {
+      "config_digest": "sha256:7f965b6153f6a5a4f2c6a67c7202aa87f86cb731297ac2bc59489a791149ad58",
+      "deployment_ref": "reltide-capacity/postgres18@sha256:645038446a94aae22a80ad4fa2d91a8705b536fcd34ec70497659b651b2d0e8e",
+      "docker_archive": ".capacity/pr29-final-images-20260930/postgres18.docker.tar",
+      "docker_archive_sha256": "14edb7e3edf8eb9de3c5bd3b2dbc2903018bd50670422b58a4b6a46430d79991",
+      "local_runtime_identity": "sha256:7f965b6153f6a5a4f2c6a67c7202aa87f86cb731297ac2bc59489a791149ad58",
+      "oci_archive": ".capacity/pr29-final-images-20260930/postgres18.oci.tar",
+      "oci_archive_sha256": "048f63599328d2cf3d508c042c1f25775f6809d012e8ef46f47e3d3608065bdc",
+      "oci_manifest_digest": "sha256:645038446a94aae22a80ad4fa2d91a8705b536fcd34ec70497659b651b2d0e8e"
+    },
+    "application-pg": {
+      "config_digest": "sha256:60d3d947a50589edfbf0c57aabdb48a256e562cd53233ebe4b8f124a7a10e17c",
+      "deployment_ref": "reltide-capacity/application-pg@sha256:f69306ce733180dba17ff77c1cdfced3ec238e4ca130e3445e90c7d053420da2",
+      "docker_archive": ".capacity/pr29-final-images-20260930/application-pg.docker.tar",
+      "docker_archive_sha256": "cf4cb685f596a220ce9b4b41773e1b165f3faab3b3f05d798f5fcd328a4973d9",
+      "local_runtime_identity": "sha256:60d3d947a50589edfbf0c57aabdb48a256e562cd53233ebe4b8f124a7a10e17c",
+      "oci_archive": ".capacity/pr29-final-images-20260930/application-pg.oci.tar",
+      "oci_archive_sha256": "17a69868c858776eb482fcb45e6d69cdaab6a37d8b8d3cb4a0dbf20232f3e1de",
+      "oci_manifest_digest": "sha256:f69306ce733180dba17ff77c1cdfced3ec238e4ca130e3445e90c7d053420da2"
+    },
+    "temporal-pg": {
+      "config_digest": "sha256:378af1476554106f5d410e04fbfe444b693abed5ca12e95e0881577ccfd116ab",
+      "deployment_ref": "reltide-capacity/temporal-pg@sha256:0e1b6253f3bfcfcf32750e1b3b2e9376fd6d16674d5c9dfddde98d8651f49e4e",
+      "docker_archive": ".capacity/pr29-final-images-20260930/temporal-pg.docker.tar",
+      "docker_archive_sha256": "1475642283134bef622411ac702d708bc10c0212ace744b27a0bdbc38b1aaf2a",
+      "local_runtime_identity": "sha256:378af1476554106f5d410e04fbfe444b693abed5ca12e95e0881577ccfd116ab",
+      "oci_archive": ".capacity/pr29-final-images-20260930/temporal-pg.oci.tar",
+      "oci_archive_sha256": "007a927654f16aba836a655bf2442261b84b7d8c44b8de2670fe209432c020c0",
+      "oci_manifest_digest": "sha256:0e1b6253f3bfcfcf32750e1b3b2e9376fd6d16674d5c9dfddde98d8651f49e4e"
+    },
+    "probe": {
+      "config_digest": "sha256:b9f3abf4149da12084903554bafa22569d678760a91943ee28c5117057642f08",
+      "deployment_ref": "reltide-capacity/probe@sha256:5e1394dc685f8644eb45e6fa94fe36520b67d5e9aeb443154d7eea1b56ebeae2",
+      "docker_archive": ".capacity/pr29-final-images-20260930/probe.docker.tar",
+      "docker_archive_sha256": "f38d37b6124bec7c924fdc58cb0b87b060c6b7218e29e889a58210a8da1b15a8",
+      "local_runtime_identity": "sha256:b9f3abf4149da12084903554bafa22569d678760a91943ee28c5117057642f08",
+      "oci_archive": ".capacity/pr29-final-images-20260930/probe.oci.tar",
+      "oci_archive_sha256": "58ef3ed1a257351fcefed3cada868291d6160e56f23d2959fe05169cdc0f77d9",
+      "oci_manifest_digest": "sha256:5e1394dc685f8644eb45e6fa94fe36520b67d5e9aeb443154d7eea1b56ebeae2"
+    },
+    "api": {
+      "config_digest": "sha256:e87bebba924bc6527b744a5be4e70573ae35db1fc45005a3ffad438543231ece",
+      "deployment_ref": "reltide-capacity/api@sha256:a85fba52382b100d15b771d003f21a7bfeeffe50ea7a9e0d3b5a1a836438e184",
+      "docker_archive": ".capacity/pr29-final-images-20260930/api.docker.tar",
+      "docker_archive_sha256": "238f5dbb1143dd8464c52e0a704d7790fdd45bc9f9d484b12f19e0d5c42f1121",
+      "local_runtime_identity": "sha256:e87bebba924bc6527b744a5be4e70573ae35db1fc45005a3ffad438543231ece",
+      "oci_archive": ".capacity/pr29-final-images-20260930/api.oci.tar",
+      "oci_archive_sha256": "41ff488514c52e2743705b21a17e8c907bbed783f5dd1e86ac40bf59a8ac00f6",
+      "oci_manifest_digest": "sha256:a85fba52382b100d15b771d003f21a7bfeeffe50ea7a9e0d3b5a1a836438e184"
+    },
+    "app": {
+      "config_digest": "sha256:08912480610a13a8c634ba1989e865fc5e9fdeb82d2d985ffc1314af336efddb",
+      "deployment_ref": "reltide-capacity/app@sha256:9145cce6ee94df3840a066c250a67bed16ec93b8fc2dee563fb1609bd3f0cd76",
+      "docker_archive": ".capacity/pr29-final-images-20260930/app.docker.tar",
+      "docker_archive_sha256": "8b12653e2b8f5de9585130d7b0a78152ffdb81a86007525cc3c08049bc198d0c",
+      "local_runtime_identity": "sha256:08912480610a13a8c634ba1989e865fc5e9fdeb82d2d985ffc1314af336efddb",
+      "oci_archive": ".capacity/pr29-final-images-20260930/app.oci.tar",
+      "oci_archive_sha256": "5e54e5a5fb619a39bd5c6f8918e2ea906ad8775e9f8f26a33141fc4b2fd32a73",
+      "oci_manifest_digest": "sha256:9145cce6ee94df3840a066c250a67bed16ec93b8fc2dee563fb1609bd3f0cd76"
+    },
+    "web": {
+      "config_digest": "sha256:2ea75476a65101984ca48470bba5f259d839f0a7ddbbf27a19a8c05f39743681",
+      "deployment_ref": "reltide-capacity/web@sha256:be0ee540772c422bbb839e243f84053ceb14e51ddd0f3f15599d6a53fb34ba3f",
+      "docker_archive": ".capacity/pr29-final-images-20260930/web.docker.tar",
+      "docker_archive_sha256": "2383e7efd7127d70e3dfdf1f3429525c635572e3aa086c6b68966a10efc3de5e",
+      "local_runtime_identity": "sha256:2ea75476a65101984ca48470bba5f259d839f0a7ddbbf27a19a8c05f39743681",
+      "oci_archive": ".capacity/pr29-final-images-20260930/web.oci.tar",
+      "oci_archive_sha256": "938c2edfa8655ed7272d4d0b73ed696b14c398abad34ad9eadc717477659762d",
+      "oci_manifest_digest": "sha256:be0ee540772c422bbb839e243f84053ceb14e51ddd0f3f15599d6a53fb34ba3f"
+    },
+    "docs": {
+      "config_digest": "sha256:a417de701c1938fbe0f7bd4db48770ffa086503095681f48c488d966a6bf5824",
+      "deployment_ref": "reltide-capacity/docs@sha256:18701a7c94233e6358fd5162a52d1f222a367c5c14e7746dffa282c528b85e27",
+      "docker_archive": ".capacity/pr29-final-images-20260930/docs.docker.tar",
+      "docker_archive_sha256": "5308043ab37eda605c537a148044e4324feaca0f5db501a29a40c5e2817259d2",
+      "local_runtime_identity": "sha256:a417de701c1938fbe0f7bd4db48770ffa086503095681f48c488d966a6bf5824",
+      "oci_archive": ".capacity/pr29-final-images-20260930/docs.oci.tar",
+      "oci_archive_sha256": "ca293a03c3523028852bc52c14cb06a17dd64ff650b3ed0fb1c1a745068b9a4f",
+      "oci_manifest_digest": "sha256:18701a7c94233e6358fd5162a52d1f222a367c5c14e7746dffa282c528b85e27"
+    }
+  },
+  "source_commit": "a1a66fa31dd88dcc85b7bb848907e8a0b9d272eb",
+  "config_sha256": "3613bf4a3b2d4bc880530f4cbebdcfc351834b6592fdc2da15743bd131db32ed",
+  "build_identity": {
+    "build_input_sha256": "f169c7ebc05ea78dad3d1a05e8e3a78a44681ed3ed9ae70a964d4fe429832d0b",
+    "purpose": "local_correctness_only",
+    "source_commit": "a1a66fa31dd88dcc85b7bb848907e8a0b9d272eb",
+    "source_dirty": false
+  }
+}

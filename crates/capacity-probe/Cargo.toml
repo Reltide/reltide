@@ -1,0 +1,38 @@
+[package]
+name = "reltide-capacity-probe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+temporalio-sdk = { version = "=1.0.0", default-features = false, features = [
+  "envconfig",
+  "prometheus",
+] }
+temporalio-client = { version = "=1.0.0", features = ["vendored-protox"] }
+temporalio-common = "=1.0.0"
+temporalio-macros = "=1.0.0"
+temporalio-workflow = "=1.0.0"
+futures = "=0.3.34"
+tokio = { version = "=1.53.1", features = [
+  "rt-multi-thread",
+  "macros",
+  "signal",
+  "time",
+  "io-util",
+  "io-std",
+] }
+tokio-postgres = "=0.7.18"
+deadpool-postgres = "=0.14.2"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.11.0"
+thiserror = "=2.0.21"
+
+[dev-dependencies]
+temporalio-sdk = { version = "=1.0.0", default-features = false, features = [
+  "testing",
+  "envconfig",
+  "prometheus",
+] }
