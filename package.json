@@ -37,7 +37,7 @@
     "husky": "9.1.7",
     "lint-staged": "17.6.0",
     "nx": "23.2.1",
-    "oxfmt": "0.70.0",
+    "oxfmt": "0.71.0",
     "oxlint": "1.85.0",
     "typescript": "5.9.3",
     "ultracite": "7.12.1",
