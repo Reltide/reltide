@@ -9,6 +9,13 @@ dist/
 /.capacity/
 *.tsbuildinfo
 
+# Local credentials and recovery identities.
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.agekey
+
 # Next.js
 .next
 out
