@@ -2,7 +2,7 @@
   "name": "reltide-capacity",
   "services": {
     "app": {
-      "image": "reltide-capacity/app@sha256:d2ebbd19041cd37616932b90fbc6a7e0f08dba7d14ad910e08c91fd5797dea47",
+      "image": "reltide-capacity/app@sha256:9145cce6ee94df3840a066c250a67bed16ec93b8fc2dee563fb1609bd3f0cd76",
       "platform": "linux/amd64",
       "mem_limit": "128m",
       "memswap_limit": "128m",
@@ -36,7 +36,7 @@
       }
     },
     "web": {
-      "image": "reltide-capacity/web@sha256:e2a6dd3d944ee7736310422a073ce8474deb0b53ce280bf8ac02333f982c52f8",
+      "image": "reltide-capacity/web@sha256:be0ee540772c422bbb839e243f84053ceb14e51ddd0f3f15599d6a53fb34ba3f",
       "platform": "linux/amd64",
       "mem_limit": "96m",
       "memswap_limit": "96m",
@@ -69,7 +69,7 @@
       }
     },
     "docs": {
-      "image": "reltide-capacity/docs@sha256:45aa41a73cc0ac9bde2689788bab946f3349518cc321795aedb7cfaa95895b18",
+      "image": "reltide-capacity/docs@sha256:18701a7c94233e6358fd5162a52d1f222a367c5c14e7746dffa282c528b85e27",
       "platform": "linux/amd64",
       "mem_limit": "128m",
       "memswap_limit": "128m",
@@ -102,7 +102,7 @@
       }
     },
     "api": {
-      "image": "reltide-capacity/api@sha256:64f15dd37e399b91e96d197f76d00d561ecf9f08ccf11c242a6a1818d21dffad",
+      "image": "reltide-capacity/api@sha256:a85fba52382b100d15b771d003f21a7bfeeffe50ea7a9e0d3b5a1a836438e184",
       "platform": "linux/amd64",
       "mem_limit": "64m",
       "memswap_limit": "64m",
@@ -133,7 +133,7 @@
       }
     },
     "probe": {
-      "image": "reltide-capacity/probe@sha256:56ab720bd089b2002cdc83a00c308b615ec134cc4f0dfe6a8d4c02267f7ad9e5",
+      "image": "reltide-capacity/probe@sha256:5e1394dc685f8644eb45e6fa94fe36520b67d5e9aeb443154d7eea1b56ebeae2",
       "platform": "linux/amd64",
       "mem_limit": "96m",
       "memswap_limit": "96m",
@@ -160,7 +160,7 @@
       ]
     },
     "application-pg": {
-      "image": "reltide-capacity/application-pg@sha256:2772237650012e6179ac0cb2ce17bdd877ea841bb7d0f25978a08f3802b1c792",
+      "image": "reltide-capacity/application-pg@sha256:f69306ce733180dba17ff77c1cdfced3ec238e4ca130e3445e90c7d053420da2",
       "platform": "linux/amd64",
       "mem_limit": "192m",
       "memswap_limit": "192m",
@@ -191,7 +191,7 @@
       "command": ["postgres", "-c", "config_file=/etc/capacity/postgresql.conf"]
     },
     "temporal-pg": {
-      "image": "reltide-capacity/temporal-pg@sha256:c40d7042e15109833d9dd88901faebc601d81c594adc51e28779b57dde442d5a",
+      "image": "reltide-capacity/temporal-pg@sha256:0e1b6253f3bfcfcf32750e1b3b2e9376fd6d16674d5c9dfddde98d8651f49e4e",
       "platform": "linux/amd64",
       "mem_limit": "192m",
       "memswap_limit": "192m",
