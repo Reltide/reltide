@@ -19,6 +19,9 @@
     "managerFilePatterns": ["infra/coolify/*.compose.yml"]
   },
   "automerge": false,
+  "automergeType": "pr",
+  "platformAutomerge": false,
+  "ignoreTests": false,
   "ignoreUnstable": true,
   "rangeStrategy": "pin",
   "ignorePaths": [
@@ -32,7 +35,7 @@
   "internalChecksFilter": "strict",
   "lockFileMaintenance": { "enabled": true },
   "prBodyNotes": [
-    "Human review is required. Run the full Quality gates workflow on this commit before merging; dependency and toolchain inputs must select all platform projects.",
+    "Nonbreaking updates may automerge after all reported CI checks pass. Major and pre-1.0 version changes require human review and the full Quality gates workflow on this commit; dependency and toolchain inputs must select all platform projects.",
     "Record compatibility failures in docs/maintenance.md and the dependency dashboard. Do not bypass checks or permanently suppress major updates."
   ],
   "customManagers": [
@@ -48,6 +51,17 @@
     }
   ],
   "packageRules": [
+    {
+      "description": "Automerge minor and patch updates for stable dependencies",
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchCurrentVersion": "!/^[vV]?0(?:\\.|$)/",
+      "automerge": true
+    },
+    {
+      "description": "Automerge pin, digest, and lockfile maintenance updates",
+      "matchUpdateTypes": ["pin", "pinDigest", "digest", "lockFileMaintenance"],
+      "automerge": true
+    },
     {
       "matchDatasources": ["npm"],
       "minimumReleaseAge": "1 day"

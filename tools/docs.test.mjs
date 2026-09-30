@@ -143,6 +143,11 @@ console.log(JSON.stringify(source.getPages().map(page => ({
   const health = pages.find((page) => page.url.endsWith("/getHealth"));
   assert.match(health.title, /health/iu);
   assert.ok(health.structuredData);
+});
+
+test("validates all guide and generated reference links from a clean copy", () => {
+  const { docs } = fixture(true);
+  assertSuccess(run(docs, "prepare-content.mjs"));
   assertSuccess(run(docs, "check-links.mjs"));
 });
 
@@ -162,7 +167,7 @@ test("rejects missing and malformed schemas", () => {
   assert.match(invalid.stderr, /OpenAPI/u);
 });
 
-test("validates routes and heading fragments", () => {
+test("accepts valid routes and heading fragments", () => {
   const { docs } = fixture();
   assertSuccess(run(docs, "prepare-content.mjs"));
   const index = join(docs, "content/docs/index.mdx");
@@ -172,18 +177,29 @@ test("validates routes and heading fragments", () => {
     `${valid}\n[Health](/docs/reference/generated/getHealth)\n`
   );
   assertSuccess(run(docs, "check-links.mjs"));
-  writeFileSync(index, `${valid}\n[Missing route](/docs/missing)\n`);
-  const route = run(docs, "check-links.mjs");
-  assert.notEqual(route.status, 0);
-  assert.match(route.stdout + route.stderr, /\/docs\/missing/u);
-  writeFileSync(index, `${valid}\n[Missing heading](/docs#missing-heading)\n`);
-  const anchor = run(docs, "check-links.mjs");
-  assert.notEqual(anchor.status, 0);
-  assert.match(anchor.stdout + anchor.stderr, /missing-heading/u);
-  writeFileSync(index, `${valid}\n[Same-page missing](#missing-heading)\n`);
-  const samePage = run(docs, "check-links.mjs");
-  assert.notEqual(samePage.status, 0);
-  assert.match(samePage.stdout + samePage.stderr, /missing-heading/u);
+});
+
+test.each([
+  ["route", "[Missing route](/docs/missing)", /\/docs\/missing/u],
+  [
+    "heading fragment",
+    "[Missing heading](/docs#missing-heading)",
+    /missing-heading/u,
+  ],
+  [
+    "same-page heading fragment",
+    "[Same-page missing](#missing-heading)",
+    /missing-heading/u,
+  ],
+])("rejects missing %s", (_kind, link, expected) => {
+  const { docs } = fixture();
+  assertSuccess(run(docs, "prepare-content.mjs"));
+  const index = join(docs, "content/docs/index.mdx");
+  const valid = readFileSync(index, "utf-8");
+  writeFileSync(index, `${valid}\n${link}\n`);
+  const result = run(docs, "check-links.mjs");
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout + result.stderr, expected);
 });
 
 test.each([
