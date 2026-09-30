@@ -32,7 +32,7 @@ No optional Cargo features exist yet. Default, no-default-features, and all-feat
 
 ## Required checks and isolation
 
-CI runs on all PRs, main pushes, `v*` tags, and manual dispatch, without path filters. PRs use affected frontend/docs tasks; other events run the full suite. Rust and updater validation always run. Manually run the workflow on an upgrade branch for full pre-merge checks and on the exact release SHA before deployment.
+CI runs on all PRs, main pushes, `v*` tags, and manual dispatch, without path filters. PRs use affected frontend/docs tasks; other events run the full suite. Rust and updater validation always run. Manually run the workflow on an upgrade branch requiring human review for full pre-merge checks and on the exact release SHA before deployment.
 
 Require `Quality gates` and `Conventional PR title` on main once the repository plan supports protection. The aggregate `Quality gates` job runs after upstream failures and rejects failed, cancelled, or skipped frontend, Rust matrix, or validator jobs. A skipped workflow is not release evidence.
 
@@ -44,7 +44,9 @@ Platform deployment targets Hetzner Cloud in Finland (`hel1`). Inspect the alrea
 
 ## Dependency upgrades
 
-Renovate covers npm (including pnpm), Cargo, `.node-version`, Rust toolchain/workspace version, Dockerfiles/Compose, and GitHub Actions. It retains exact versions and image/action digests. Stable majors are eligible; all automerge is disabled. Nx packages update together; Rust updates include the workspace `rust-version`. Cargo/pnpm lockfile maintenance is enabled. [Renovate managers](https://docs.renovatebot.com/modules/manager/), [Rust toolchain updates](https://docs.renovatebot.com/modules/manager/rust-toolchain/)
+Renovate covers npm (including pnpm), Cargo, `.node-version`, Rust toolchain/workspace version, Dockerfiles/Compose, and GitHub Actions. It retains exact versions and image/action digests. Stable minor/patch updates, pin/digest updates, and lockfile maintenance may automerge after all reported CI checks pass. Major and pre-1.0 version changes remain eligible but require human review. Nx packages update together; Rust updates include the workspace `rust-version`. Cargo/pnpm lockfile maintenance is enabled. [Renovate managers](https://docs.renovatebot.com/modules/manager/), [Rust toolchain updates](https://docs.renovatebot.com/modules/manager/rust-toolchain/), [Automerge non-major updates](https://docs.renovatebot.com/key-concepts/automerge/#automerge-non-major-updates)
+
+Automerge uses PRs with `platformAutomerge: false` and `ignoreTests: false`, so Renovate itself waits for passing checks instead of enabling GitHub-native automerge while required-status enforcement is blocked. Renovate requires reported CI checks and waits while any reported check is pending or failing. Required-status enforcement remains tracked in MAX-27. [Renovate automerge checks](https://docs.renovatebot.com/key-concepts/automerge/#absence-of-tests), [Platform automerge requirements](https://docs.renovatebot.com/configuration-options/#platformautomerge)
 
 The Compose manager also scans `infra/coolify/*.compose.yml`, retaining its default filename patterns. This includes the management, production, and staging proxies and the staging smoke service, so their pinned images receive update PRs. [Compose file matching](https://docs.renovatebot.com/modules/manager/docker-compose/), [Additional manager file patterns](https://docs.renovatebot.com/configuration-options/#managerfilepatterns)
 
@@ -68,8 +70,8 @@ Updater verification passed on 27 September 2026. PR #11 aligned the manifest, C
 For subsequent upgrades and completion of MAX-27:
 
 1. Read main's protection or active ruleset and confirm both required status names, with GitHub Actions as their expected source.
-2. Confirm Renovate's repository access, dependency dashboard, and first upgrade PR. Check that the PR preserves exact versions and lockfiles and requires human review.
-3. Verify the upgrade PR's checks, then run the full CI workflow on its current commit before merging. Keep MAX-27 open until required-status enforcement is verified.
+2. Confirm Renovate's repository access, dependency dashboard, and first upgrade PR. Check that the PR preserves exact versions and lockfiles and applies the automerge policy above.
+3. Verify the upgrade PR's checks. For major or pre-1.0 version changes, run the full CI workflow on its current commit and obtain human review before merging. Keep MAX-27 open until required-status enforcement is verified.
 
 Use these read-only commands to recheck the external blockers:
 
@@ -82,7 +84,7 @@ gh issue list --repo Reltide/reltide --state all --search '"Dependency Dashboard
 gh pr list --repo Reltide/reltide --state all --author 'app/renovate'
 ```
 
-Upgrades must pass PR checks and a manual full workflow on the current commit, receive human review, and preserve lockfiles. Toolchain updates also update contributor docs and `AGENTS.md`. New container/service definitions use supported stable versions/digests. Upgrade suggestions do not authorize provisioning/deployment. Temporal upgrades need its supported schema sequence and worker replay checks once introduced.
+Upgrades must pass PR checks and preserve lockfiles. Major and pre-1.0 version changes also require a manual full workflow on the current commit and human review; eligible nonbreaking updates may automerge. Toolchain updates also update contributor docs and `AGENTS.md`. New container/service definitions use supported stable versions/digests. Upgrade suggestions do not authorize provisioning/deployment. Temporal upgrades need its supported schema sequence and worker replay checks once introduced.
 
 Node upgrades must keep `package.json#engines.node`, `.node-version`, and the contributor setup instructions aligned. CI installs Node from `.node-version`; the quality-gate regression checks both committed pins and the running Node version, so an engine-only upgrade cannot pass verification.
 
