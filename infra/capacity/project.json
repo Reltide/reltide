@@ -1,0 +1,50 @@
+{
+  "name": "capacity-experiment",
+  "root": "infra/capacity",
+  "projectType": "application",
+  "implicitDependencies": [
+    "app",
+    "web",
+    "docs",
+    "reltide-api",
+    "reltide-capacity-probe"
+  ],
+  "targets": {
+    "check-config": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "inputs": [
+        "default",
+        "rustGlobals",
+        "^default",
+        "{workspaceRoot}/tools/capacity/**/*",
+        "{workspaceRoot}/.dockerignore"
+      ],
+      "options": { "command": "node tools/capacity/config.mjs check-config" }
+    },
+    "build-images": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "inputs": [
+        "default",
+        "rustGlobals",
+        "^default",
+        "{workspaceRoot}/tools/capacity/**/*",
+        "{workspaceRoot}/.dockerignore"
+      ],
+      "options": { "command": "node tools/capacity/build.mjs" }
+    },
+    "integration": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "inputs": [
+        "default",
+        "rustGlobals",
+        "^default",
+        "{workspaceRoot}/tools/capacity/**/*",
+        "{workspaceRoot}/.dockerignore"
+      ],
+      "options": { "command": "node tools/capacity/integration.mjs" }
+    }
+  }
+}

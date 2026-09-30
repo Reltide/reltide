@@ -101,3 +101,59 @@ Record failing upgrade PRs in the dashboard and blockers below with versions, fa
 - **Docker unavailable:** diagnose with `pnpm --package=renovate@44.115.10 dlx renovate-config-validator --strict --no-global renovate.json`. Native RE2 may be unavailable, with a warning about less accurate regex validation. Repeat in the digest-pinned container before release. Run remaining release commands separately or use the full GitHub workflow. [Validator docs](https://docs.renovatebot.com/config-validation/)
 - **Workflow validation:** run `actionlint .github/workflows/ci.yml .github/workflows/pr-title.yml` on workflow edits (validated with 1.7.12). Install from the [official project](https://github.com/rhysd/actionlint) if absent. GitHub check execution supplies evidence beyond syntax/formatting.
 - **Missing toolchains:** install exact pins from official distributions. Newer system Node or floating `stable` Rust does not replace committed versions. Record installation/compatibility failures as blockers.
+
+## Private capacity experiment preflight
+
+`capacity-experiment:check-config`, `:build-images`, and `:integration` are uncached
+Nx targets. Builds require Docker/Buildx, Node 26.10.0 and pnpm 12.6.0, and export
+secret-free linux/amd64 OCI archives plus a separate Docker archive for the local
+legacy image store into ignored `.capacity/<CAPACITY_RUN_ID>/`. Build inputs,
+source/submodule pins, dirty-source flag and actual build-input checksum, OCI
+manifest, config and archive identities are recorded in
+`infra/capacity/images.lock.json`. The local override uses verified config IDs;
+deployment references use the OCI manifest digest. Before any later OCI import is
+used, `verifyDeploymentIdentity` must verify the imported manifest identity.
+A successful local Docker-format import does not prove staging OCI import support.
+These artifacts are marked local correctness only; Task 8 must rebuild from
+committed reviewed sources before deployment. `source_commit` identifies the base
+when dirty inputs were present; it does not claim that commit contains the
+uncommitted build configuration.
+
+Integration uses synthetic credentials, owned resources with exact run labels,
+two separate PostgreSQL volumes/versions, and a standard private bridge. Only the
+listed HTTP/admin ports publish on 127.0.0.1. PostgreSQL, Temporal and OTLP stay
+unpublished; macOS fixtures reach verified Docker VM container IPs. No live host,
+provider or R2 operations occur. Later WAL archiving needs an explicit approved
+PostgreSQL-to-R2 EU egress/credential boundary; the current local spool is not a
+remote backup implementation.
+
+The aggregate memory ceiling remains 3072 MiB with memory+swap equal to memory.
+The initial HyperDX256/ClickHouse768 allocation failed local startup with a real
+HyperDX OOM. R7 authorizes the new HyperDX384/ClickHouse640 candidate, keeping all
+other allocations unchanged. This remains a constrained hypothesis: the official
+ClickHouse OSS sizing guide recommends substantially more memory for production.
+Local amd64 emulation and short readiness checks do not establish CX23 capacity.
+Every OOM or unexpected exit stops integration and retains separate attempt
+failure evidence before owned cleanup.
+
+The versioned HyperDX launcher follows pinned 2.39.1 initialization, required-auth,
+API, UI and OpAMP startup, with child termination/failure propagation. It omits
+only the separate alert-check/dashboard provisioner tasks under R5 because this
+experiment disables external notifications. R6 replaces the image's extra Node
+healthcheck with the same pinned image's native wget, checking API `/health` and
+UI `/`; the integration also requires API `/ready`. This custom launcher is not
+an officially supported API/UI distribution. Compare it with the exact upstream
+entrypoint whenever upgrading; retain prior failed attempts instead of treating
+startup corrections as proof those attempts passed.
+
+R8 keeps logs, metrics and traces with `sizer: items` and one 341-event queue per
+signal (1023 queued events combined). Each signal has one consumer, for three
+consumers in total. The pinned [exporterhelper 0.155.0 semantics](https://raw.githubusercontent.com/open-telemetry/opentelemetry-collector/v0.155.0/exporter/exporterhelper/README.md)
+define items as spans, metric data points or log records; the default request
+sizer would count batches instead. Integration verifies all three effective queue
+capacity metrics and the applied config units. The validator parses `collector.yaml` with the YAML parser directly pinned
+by the exact Nx dependency in the frozen lockfile. Limits separately account for up to 768 batch items in three active
+exporter requests and 768 in three processor batches; these are separate from the
+waiting queue and do not bound incoming request decoding or total RSS. The memory
+limiter remains 96 MiB and the container ceiling remains 128 MiB. Overflow/loss
+experiments and continuous memory sampling belong to later tasks.

@@ -1,0 +1,75 @@
+{
+  "total_memory_mib": 3072,
+  "max_transient_helpers": 1,
+  "services": {
+    "app": {
+      "memory_mib": 128,
+      "pids": 128
+    },
+    "web": {
+      "memory_mib": 96,
+      "pids": 128
+    },
+    "docs": {
+      "memory_mib": 128,
+      "pids": 128
+    },
+    "api": {
+      "memory_mib": 64,
+      "pids": 128
+    },
+    "probe": {
+      "memory_mib": 96,
+      "pids": 128
+    },
+    "application-pg": {
+      "memory_mib": 192,
+      "pids": 128
+    },
+    "temporal-pg": {
+      "memory_mib": 192,
+      "pids": 128
+    },
+    "temporal": {
+      "memory_mib": 448,
+      "pids": 256
+    },
+    "temporal-ui": {
+      "memory_mib": 64,
+      "pids": 128
+    },
+    "clickhouse": {
+      "memory_mib": 640,
+      "pids": 256
+    },
+    "collector": {
+      "memory_mib": 128,
+      "pids": 128
+    },
+    "hyperdx": {
+      "memory_mib": 384,
+      "pids": 256
+    },
+    "mongo": {
+      "memory_mib": 384,
+      "pids": 128
+    },
+    "helper": {
+      "memory_mib": 128,
+      "pids": 128
+    }
+  },
+  "collector": {
+    "batch_max_events": 256,
+    "consumers_total": 3,
+    "inflight_batch_capacity_events": 768,
+    "memory_limiter_mib": 96,
+    "processor_batch_capacity_events": 768,
+    "queue_capacity_events": 1023,
+    "queue_size_per_signal": 341,
+    "retry_elapsed_seconds": 10,
+    "signals": ["logs", "metrics", "traces"],
+    "sizer": "items",
+    "num_consumers_per_signal": 1
+  }
+}
