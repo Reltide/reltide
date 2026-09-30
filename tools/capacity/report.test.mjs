@@ -703,6 +703,7 @@ test.each([
   ["malformed events with redacted output", 2],
 ])("CLI writes reports: %s", async (scenario, expected) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "capacity-report-"));
+  const stale = "STALE_REPORT_FROM_PREVIOUS_INVOCATION";
   try {
     const cli = () =>
       spawnSync(
@@ -711,6 +712,11 @@ test.each([
         { encoding: "utf-8" }
       );
     if (scenario !== "absent evidence") {
+      await Promise.all(
+        ["json", "csv", "md"].map((ext) =>
+          writeFile(path.join(dir, `report.${ext}`), stale)
+        )
+      );
       const e = fixture();
       if (scenario === "measured HTTP failure") {
         e.events[0].status = 503;
@@ -731,6 +737,16 @@ test.each([
       );
     }
     assert.equal(cli().status, expected);
+    if (scenario !== "absent evidence") {
+      const reports = await Promise.all(
+        ["json", "csv", "md"].map((ext) =>
+          readFile(path.join(dir, `report.${ext}`), "utf-8")
+        )
+      );
+      for (const report of reports) {
+        assert.ok(!report.includes(stale));
+      }
+    }
     if (scenario === "missing restores with JSON/CSV/Markdown reports") {
       const reports = await Promise.all(
         ["json", "csv", "md"].map((ext) =>
