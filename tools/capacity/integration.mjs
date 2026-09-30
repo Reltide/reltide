@@ -37,7 +37,19 @@ export const createCapacityRedactor = (secrets) => (value) => {
 
 export const sanitizeCapacityError = (error, redact) => {
   const source = error instanceof Error ? error : new Error(String(error));
-  const safe = new Error(redact(source.message));
+  const networkCodes = new Set([
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "ETIMEDOUT",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "UND_ERR_SOCKET",
+  ]);
+  const code = networkCodes.has(source.cause?.code)
+    ? ` [${source.cause.code}]`
+    : "";
+  const safe = new Error(redact(source.message + code));
   safe.name = redact(source.name);
   safe.stack = redact(source.stack ?? safe.stack);
   return safe;
@@ -136,6 +148,16 @@ export const verifyServiceState = (container) => {
     );
   }
 };
+
+export const freshWorkerPollers = (description, hostname, startedAt) =>
+  (description.pollers ?? []).filter(
+    (poller) =>
+      poller.identity.endsWith(`@${hostname}`) &&
+      (poller.last_access_time
+        ? Number(poller.last_access_time.seconds) * 1000 +
+          Number(poller.last_access_time.nanos) / 1_000_000
+        : Date.parse(poller.lastAccessTime)) >= startedAt
+  );
 
 export const verifyTcpListener = async (host, port) => {
   const socket = connect({ host, port });
@@ -257,7 +279,7 @@ export const finalizeIntegration = async ({
 };
 
 const verifyTelemetry = async ({
-  address,
+  endpoint,
   env,
   ch,
   wait,
@@ -268,8 +290,11 @@ const verifyTelemetry = async ({
   const origin = "http://127.0.0.1:18000";
   const request = (pathname, options = {}) =>
     fetch(`${origin}${pathname}`, {
-      signal: AbortSignal.timeout(10_000),
       ...options,
+      signal: AbortSignal.any([
+        AbortSignal.timeout(10_000),
+        ...(options.signal ? [options.signal] : []),
+      ]),
     });
   const anonymous = await request("/connections");
   assert.equal(anonymous.status, 401);
@@ -315,7 +340,7 @@ const verifyTelemetry = async ({
     !listing.includes(env.CAPACITY_CH_UI_PASSWORD),
     "connection list must redact secrets"
   );
-  const otlp = `http://${address("collector")}:4318/v1/logs`;
+  const otlp = `http://${endpoint("collector", 4318)}/v1/logs`;
   const unauthenticated = await fetch(otlp, {
     body: "{}",
     headers: { "content-type": "application/json" },
@@ -420,9 +445,12 @@ const verifyTelemetry = async ({
       ).trim() === "0",
     340
   );
-  const collector = await fetch(`http://${address("collector")}:8888/metrics`, {
-    signal: AbortSignal.timeout(5000),
-  });
+  const collector = await fetch(
+    `http://${endpoint("collector", 8888)}/metrics`,
+    {
+      signal: AbortSignal.timeout(5000),
+    }
+  );
   assert.equal(collector.status, 200);
   const metrics = await collector.text();
   assert.match(metrics, /otelcol_receiver_accepted_log_records/u);
@@ -493,9 +521,47 @@ const verifyTelemetry = async ({
     system_logs: systemLogs.map(({ engine, name }) => ({ engine, name })),
     ttl_tables: tables,
   };
+  return {
+    connectionId,
+    ingest: (kind, payload, signal) =>
+      fetch(`http://${endpoint("collector", 4318)}/v1/${kind}`, {
+        body: JSON.stringify(payload),
+        headers: {
+          authorization: `Bearer ${env.CAPACITY_OTLP_TOKEN}`,
+          "content-type": "application/json",
+        },
+        method: "POST",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+      }),
+    query: async (sql, signal) => {
+      const response = await fetch(`http://${endpoint("clickhouse", 8123)}/`, {
+        body: sql,
+        headers: {
+          "X-ClickHouse-Key": env.CAPACITY_CH_UI_PASSWORD,
+          "X-ClickHouse-User": "capacity_ui",
+        },
+        method: "POST",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+      });
+      assert.ok(response.ok, "bounded telemetry query failed");
+      return response.json();
+    },
+    request: (pathname, options = {}) =>
+      request(pathname, {
+        ...options,
+        headers: {
+          "content-type": "application/json",
+          cookie: cookies,
+          ...options.headers,
+        },
+      }),
+  };
 };
 
-export const integrate = async (runId) => {
+export const integrate = async (
+  runId,
+  { diagnoseBootstrap = false, localCheck } = {}
+) => {
   if (!/^[a-z0-9-]{1,64}$/u.test(runId)) {
     throw new Error("invalid integration run ID");
   }
@@ -578,6 +644,24 @@ export const integrate = async (runId) => {
     verifyRuntimeIdentity(artifact, actual);
     local.services[name] = { image: actual, pull_policy: "never" };
   }
+  const hostPorts = {
+    "application-pg": { 5432: 15_432 },
+    clickhouse: { 8123: 18_123 },
+    collector: { 4318: 14_318, 8888: 18_888 },
+    hyperdx: { 4320: 14_320 },
+    temporal: { 7233: 17_233 },
+  };
+  if (localCheck) {
+    for (const [service, ports] of Object.entries(hostPorts)) {
+      local.services[service] = {
+        ...local.services[service],
+        ports: Object.entries(ports).map(
+          ([container, host]) => `127.0.0.1:${host}:${container}`
+        ),
+      };
+    }
+  }
+
   local.services.probe.user = `${process.getuid()}:${process.getgid()}`;
   const override = path.join(directory, "local-compose.json");
   await writeFile(override, `${JSON.stringify(local, null, 2)}\n`);
@@ -607,6 +691,24 @@ export const integrate = async (runId) => {
     );
     verifyOwnership(actual, runId);
     return network.IPAddress;
+  };
+  const resolvedEndpoints = new Map();
+  const endpoint = (service, port) => {
+    if (!localCheck || !hostPorts[service]?.[port]) {
+      return `${address(service)}:${port}`;
+    }
+    const key = `${service}:${port}`;
+    if (!resolvedEndpoints.has(key)) {
+      verifyOwnership(inspect(service), runId);
+      const published = dc("port", service, String(port)).trim();
+      assert.equal(
+        published,
+        `127.0.0.1:${hostPorts[service][port]}`,
+        "local correctness endpoint must bind loopback only"
+      );
+      resolvedEndpoints.set(key, published);
+    }
+    return resolvedEndpoints.get(key);
   };
   const check = () => {
     const ids = dc("ps", "-aq").trim().split("\n").filter(Boolean);
@@ -663,9 +765,10 @@ export const integrate = async (runId) => {
       "--query",
       sql
     );
-  const wait = (description, attempt, seconds = 90) => {
+  const wait = (description, attempt, seconds = 90, observe = null) => {
     const deadline = Date.now() + seconds * 1000;
     const poll = async () => {
+      await observe?.();
       check();
       let ready = false;
       try {
@@ -686,6 +789,7 @@ export const integrate = async (runId) => {
   };
   const evidence = {
     capacity_pass: false,
+    host_loopback_overlay: localCheck ? hostPorts : null,
     kind: "local-amd64-emulation-correctness",
     manifest,
     resource_snapshots: snapshots,
@@ -702,6 +806,51 @@ export const integrate = async (runId) => {
       );
     }
     started = true;
+    if (diagnoseBootstrap) {
+      evidence.bootstrap_diagnostics = {
+        docker: JSON.parse(
+          command("docker", ["info", "--format", "{{json .}}"])
+        ),
+        samples: [],
+        startup:
+          "Mongo dependency first; unchanged limits and readiness deadline",
+      };
+      dc("up", "-d", "mongo");
+      await wait(
+        "Mongo entrypoint completion",
+        () =>
+          dc("exec", "-T", "mongo", "cat", "/proc/1/comm").trim() === "mongod",
+        90,
+        async () => {
+          const container = inspect("mongo");
+          verifyOwnership(container, runId);
+          const sample = {
+            state: container.State,
+            time: new Date().toISOString(),
+          };
+          try {
+            sample.resources = command(
+              "docker",
+              [
+                "exec",
+                container.Id,
+                "sh",
+                "-c",
+                'for f in /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.pressure /sys/fs/cgroup/cpu.pressure /sys/fs/cgroup/io.pressure /proc/meminfo /proc/pressure/memory /proc/pressure/cpu /proc/pressure/io; do printf "\\n%s\\n" "$f"; if [ -r "$f" ]; then cat "$f"; else printf "unavailable\\n"; fi; done',
+              ],
+              { stdio: "pipe", timeout: 5000 }
+            );
+          } catch (error) {
+            sample.error = sanitizeError(error).message;
+          }
+          evidence.bootstrap_diagnostics.samples.push(sample);
+          await writeFile(
+            path.join(directory, "bootstrap-resources.json"),
+            redact(JSON.stringify(evidence.bootstrap_diagnostics, null, 2))
+          );
+        }
+      );
+    }
     dc("up", "-d", "application-pg", "temporal-pg", "clickhouse", "mongo");
     await wait(
       "application PostgreSQL",
@@ -908,7 +1057,7 @@ export const integrate = async (runId) => {
       "0"
     );
     const readerRequest = (user, password, sql, settings = "") =>
-      fetch(`http://${address("clickhouse")}:8123/?${settings}`, {
+      fetch(`http://${endpoint("clickhouse", 8123)}/?${settings}`, {
         body: sql,
         headers: {
           "X-ClickHouse-Key": password,
@@ -1075,16 +1224,20 @@ export const integrate = async (runId) => {
     await wait(
       "HyperDX OpAMP listener",
       async () => {
-        await verifyTcpListener(address("hyperdx"), 4320);
+        await verifyTcpListener(
+          localCheck ? "127.0.0.1" : address("hyperdx"),
+          localCheck ? hostPorts.hyperdx[4320] : 4320
+        );
         return true;
       },
       120
     );
     evidence.opamp_listener = true;
     check();
-    await verifyTelemetry({
+    const telemetryAccess = await verifyTelemetry({
       address,
       ch,
+      endpoint,
       env,
       evidence,
       registerSecret: (value) => secretValues.add(value),
@@ -1095,10 +1248,10 @@ export const integrate = async (runId) => {
     // replay test owns its one worker; preserve the four-connection combined cap.
     dc("stop", "probe");
     const hostFile = path.join(directory, "host-probe.env");
-    const databaseUrl = `postgresql://postgres:${env.CAPACITY_PG_PASSWORD}@${address("application-pg")}:5432/capacity`;
+    const databaseUrl = `postgresql://postgres:${env.CAPACITY_PG_PASSWORD}@${endpoint("application-pg", 5432)}/capacity`;
     await writeFile(
       hostFile,
-      `TEMPORAL_ADDRESS=http://${address("temporal")}:7233\nTEMPORAL_NAMESPACE=reltide-capacity-${runId}\nTEMPORAL_TASK_QUEUE=reltide-capacity-${runId}\nAPPLICATION_DATABASE_URL=${databaseUrl.replace("postgres:", "capacity_runtime:")}\n`,
+      `TEMPORAL_ADDRESS=http://${endpoint("temporal", 7233)}\nTEMPORAL_NAMESPACE=reltide-capacity-${runId}\nTEMPORAL_TASK_QUEUE=reltide-capacity-${runId}\nAPPLICATION_DATABASE_URL=${databaseUrl.replace("postgres:", "capacity_runtime:")}\n`,
       { mode: 0o600 }
     );
     await chmod(hostFile, 0o600);
@@ -1123,7 +1276,42 @@ export const integrate = async (runId) => {
       program: "cargo",
       redact,
     });
+    const workerStartedAt = Date.now();
     dc("start", "probe");
+    if (localCheck) {
+      const hostname = inspect("probe").Config.Hostname;
+      await wait(
+        "fresh owned workflow poller",
+        () => {
+          const description = JSON.parse(
+            helper(
+              "--entrypoint",
+              "temporal",
+              "helper",
+              "--address",
+              "temporal:7233",
+              "task-queue",
+              "describe",
+              "--namespace",
+              `reltide-capacity-${runId}`,
+              "--task-queue",
+              `reltide-capacity-${runId}`,
+              "--legacy-mode",
+              "--task-queue-type-legacy",
+              "workflow",
+              "--output",
+              "json"
+            )
+          );
+          evidence.worker_pollers = description;
+          return (
+            freshWorkerPollers(description, hostname, workerStartedAt).length >
+            0
+          );
+        },
+        90
+      );
+    }
     evidence.connections = {
       application: Number(
         pg("application-pg", "SELECT count(*) FROM pg_stat_activity").trim()
@@ -1149,6 +1337,203 @@ export const integrate = async (runId) => {
     assert.ok(evidence.connections.temporal <= 32);
     assert.ok(evidence.connections.temporal_persistence <= 16);
     check();
+    if (localCheck) {
+      const analyticsDatabaseUrl = `postgresql://capacity_analytics_reader:${env.CAPACITY_CH_FIXTURE_PASSWORD}@${endpoint("application-pg", 5432)}/capacity`;
+      const analyticsFile = path.join(directory, "analytics.env");
+      await writeFile(
+        analyticsFile,
+        `CAPACITY_ANALYTICS_DATABASE_URL=${analyticsDatabaseUrl}\n`,
+        { mode: 0o600 }
+      );
+      evidence.load = await localCheck({
+        analyticsDatabaseUrl,
+        analyticsFile,
+        collectorMetrics: async () => {
+          const response = await fetch(
+            `http://${endpoint("collector", 8888)}/metrics`,
+            { signal: AbortSignal.timeout(5000) }
+          );
+          assert.ok(response.ok);
+          const body = await response.text();
+          assert.ok(body.length < 1_048_576);
+          return body
+            .split("\n")
+            .filter((line) => line.startsWith("otelcol_"))
+            .join("\n");
+        },
+        directory,
+        fixtureInsert: (sql) => {
+          assert.equal(
+            sql,
+            `INSERT INTO capacity_analytics.ledger_sample SELECT '${runId}-load', toUInt16(number + 1) FROM numbers(10000) SETTINGS async_insert=0`
+          );
+          ch(sql);
+          return { acknowledged: true };
+        },
+        fixtureQuery: async (sql, signal) => {
+          const response = await readerRequest(
+            "capacity_fixture",
+            env.CAPACITY_CH_FIXTURE_PASSWORD,
+            sql
+          );
+          signal?.throwIfAborted();
+          assert.ok(response.ok, "bounded fixture query failed");
+          return response.json();
+        },
+        ledgerFile: hostFile,
+        manifest,
+        prepareAgedTelemetry: async (seed) => {
+          const fixture = {
+            normal_retention_days: 3,
+            started_at: new Date().toISOString(),
+            temporary_retention_days: 4,
+          };
+          evidence.aged_fixture_retention = fixture;
+          const tables = ["otel_logs", "otel_traces"];
+          const verify = (days) => {
+            const definitions = tables.map((table) => ({
+              ddl: ch(`SHOW CREATE TABLE otel.${table}`),
+              table,
+            }));
+            for (const { ddl } of definitions) {
+              assert.match(
+                ddl,
+                new RegExp(`TTL .*toIntervalDay\\(${days}\\)`, "u")
+              );
+            }
+            return definitions;
+          };
+          fixture.before = verify(3);
+          try {
+            for (const table of tables) {
+              ch(
+                `ALTER TABLE otel.${table} MODIFY TTL toDateTime(Timestamp) + INTERVAL 4 DAY`
+              );
+            }
+            fixture.prepared = verify(4);
+            return await seed();
+          } finally {
+            for (const table of tables) {
+              ch(
+                `ALTER TABLE otel.${table} MODIFY TTL toDateTime(Timestamp) + INTERVAL 3 DAY`
+              );
+            }
+            fixture.restored = verify(3);
+            fixture.restored_at = new Date().toISOString();
+            fixture.mutations = JSON.parse(
+              ch(
+                "SELECT database,table,mutation_id,command,is_done,latest_fail_reason FROM system.mutations WHERE database='otel' AND table IN ('otel_logs','otel_traces') ORDER BY create_time DESC LIMIT 20 SETTINGS max_execution_time=5 FORMAT JSON"
+              )
+            );
+          }
+        },
+        prepareRemoteCancellation: () => {
+          const name = `capacity_slow_${runId.replaceAll("-", "_")}`;
+          assert.ok(name.length <= 63);
+          const password = secret();
+          secretValues.add(password);
+          try {
+            command(
+              "docker",
+              [
+                ...args,
+                "exec",
+                "-T",
+                "clickhouse",
+                "clickhouse-client",
+                "--multiquery",
+              ],
+              {
+                env,
+                input: `CREATE VIEW capacity_analytics.${name} AS SELECT run_id,sequence FROM capacity_analytics.ledger_sample WHERE run_id='${runId}-load' AND sleepEachRow(0.0002)=0; CREATE USER ${name} IDENTIFIED WITH sha256_password BY '${password}' SETTINGS PROFILE fixture; GRANT SELECT ON capacity_analytics.${name} TO ${name}; GRANT SELECT ON capacity_analytics.ledger_sample TO ${name};`,
+                stdio: "pipe",
+              }
+            );
+          } catch (error) {
+            throw sanitizeError(error);
+          }
+          pg(
+            "application-pg",
+            `CREATE SERVER ${name} FOREIGN DATA WRAPPER clickhouse_fdw OPTIONS (driver 'http',host 'clickhouse',port '8123',dbname 'capacity_analytics',secure 'off'); GRANT USAGE ON FOREIGN SERVER ${name} TO capacity_analytics_reader; CREATE USER MAPPING FOR capacity_analytics_reader SERVER ${name} OPTIONS (user '${name}',password '${password}'); GRANT CREATE ON SCHEMA capacity_ch TO capacity_analytics_reader; SET ROLE capacity_analytics_reader; IMPORT FOREIGN SCHEMA capacity_analytics LIMIT TO (${name}) FROM SERVER ${name} INTO capacity_ch; RESET ROLE; REVOKE CREATE ON SCHEMA capacity_ch FROM capacity_analytics_reader; ALTER FOREIGN TABLE capacity_ch.${name} OWNER TO postgres; GRANT SELECT ON capacity_ch.${name} TO capacity_analytics_reader;`
+          );
+          return {
+            observe: () =>
+              JSON.parse(
+                ch(
+                  `SELECT query_id,elapsed FROM system.processes WHERE user='${name}' AND position(query,'${name}')>0 AND position(query,'${runId}-load')>0 LIMIT 1 SETTINGS max_execution_time=5,max_rows_to_read=50000,max_bytes_to_read=67108864 FORMAT JSON`
+                )
+              ),
+            table: name,
+          };
+        },
+        redact,
+        retentionSnapshot: () => ({
+          mutations: JSON.parse(
+            ch(
+              "SELECT table,mutation_id,command,is_done,latest_fail_reason FROM system.mutations WHERE database='otel' AND table IN ('otel_logs','otel_traces') ORDER BY table,mutation_id LIMIT 20 SETTINGS max_execution_time=5 FORMAT JSON"
+            )
+          ).data,
+          ttls: ["otel_logs", "otel_traces"].map((table) => ({
+            ddl: ch(`SHOW CREATE TABLE otel.${table}`),
+            table,
+          })),
+        }),
+        runId,
+        seedLedger: async (input, persist) => {
+          assert.equal(input.run_id, runId);
+          assert.equal(input.sequence, 100_000);
+          assert.equal(input.payload, "x".repeat(1024));
+          const seedFile = path.join(directory, "seed-ledger.env");
+          await writeFile(
+            seedFile,
+            `TEMPORAL_ADDRESS=http://${endpoint("temporal", 7233)}\nTEMPORAL_NAMESPACE=reltide-capacity-${runId}\nTEMPORAL_TASK_QUEUE=reltide-capacity-${runId}\nAPPLICATION_DATABASE_URL=${databaseUrl}\n`,
+            { mode: 0o600 }
+          );
+          let output;
+          try {
+            output = command(
+              path.join(root, "target/debug/reltide-capacity-probe"),
+              ["seed-ledger"],
+              {
+                env: { ...process.env, RELTIDE_CAPACITY_ENV_FILE: seedFile },
+                input: JSON.stringify(input),
+                stdio: "pipe",
+                timeout: 30_000,
+              }
+            );
+          } catch (error) {
+            throw sanitizeError(error);
+          }
+          const result = JSON.parse(output.trim());
+          await persist({ kind: "ledger_seed", ...result });
+          return result;
+        },
+        storageSnapshot: () =>
+          JSON.parse(
+            ch(
+              "SELECT table,count() AS parts,sum(rows) AS rows,sum(bytes_on_disk) AS stored_bytes,sum(data_uncompressed_bytes) AS uncompressed_bytes,sum(data_compressed_bytes) AS compressed_bytes FROM system.parts WHERE active AND database='otel' GROUP BY table ORDER BY table LIMIT 100 SETTINGS max_execution_time=5,max_rows_to_read=50000,max_bytes_to_read=67108864 FORMAT JSON"
+            )
+          ),
+        telemetry: telemetryAccess,
+        workflowHistory: (sequence) =>
+          JSON.parse(
+            helper(
+              "helper",
+              "temporal",
+              "--address",
+              "temporal:7233",
+              "workflow",
+              "show",
+              "--namespace",
+              `reltide-capacity-${runId}`,
+              "--workflow-id",
+              `reltide-capacity-${runId}-${sequence}`,
+              "--output",
+              "json"
+            )
+          ),
+      });
+    }
     evidence.result = "PASS_CORRECTNESS_ONLY";
   } catch (error) {
     evidence.result = "FAIL";

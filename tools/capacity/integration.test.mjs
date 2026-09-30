@@ -356,3 +356,49 @@ test("OpAMP listener probe requires an accepting TCP socket", async () => {
   }
   await assert.rejects(() => verifyTcpListener("127.0.0.1", address.port));
 });
+
+test("network cause codes survive sanitization without secret-bearing cause detail", () => {
+  const secret = "NETWORK_TEST_SECRET";
+  const error = new Error("fetch failed", {
+    cause: Object.assign(new Error(secret), { code: "ECONNRESET" }),
+  });
+  const safe = sanitizeCapacityError(
+    error,
+    createCapacityRedactor(new Set([secret]))
+  );
+  assert.match(safe.message, /ECONNRESET/u);
+  assert.ok(!JSON.stringify(safe).includes(secret));
+});
+
+test("worker readiness excludes stale and unrelated pollers", async () => {
+  const { freshWorkerPollers } = await import("./integration.mjs");
+  const pollers = [
+    { identity: "1@owned", lastAccessTime: "2026-09-30T13:00:01Z" },
+    { identity: "2@host", lastAccessTime: "2026-09-30T13:00:02Z" },
+    { identity: "1@owned", lastAccessTime: "2026-09-30T12:59:00Z" },
+  ];
+  assert.deepEqual(
+    freshWorkerPollers(
+      { pollers },
+      "owned",
+      Date.parse("2026-09-30T13:00:00Z")
+    ),
+    [pollers[0]]
+  );
+});
+
+test("pinned CLI poller timestamps use seconds and nanos", async () => {
+  const { freshWorkerPollers } = await import("./integration.mjs");
+  const poller = {
+    identity: "1@owned",
+    last_access_time: { nanos: 463_713_901, seconds: 1_790_776_550 },
+  };
+  assert.deepEqual(
+    freshWorkerPollers({ pollers: [poller] }, "owned", 1_790_776_550_000),
+    [poller]
+  );
+  assert.deepEqual(
+    freshWorkerPollers({ pollers: [poller] }, "owned", 1_790_776_551_000),
+    []
+  );
+});
