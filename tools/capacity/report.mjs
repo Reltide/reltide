@@ -1,0 +1,1262 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
+
+import { readEvidence, serializeReport, writeReport } from "./report-io.mjs";
+
+const services = [
+  "app",
+  "web",
+  "docs",
+  "api",
+  "probe",
+  "application-pg",
+  "temporal-pg",
+  "temporal",
+  "temporal-ui",
+  "clickhouse",
+  "collector",
+  "hyperdx",
+  "mongo",
+];
+const components = [
+  "capacity",
+  "analytics",
+  "retention",
+  "backup",
+  "restart",
+  "recovery",
+];
+// oxlint-disable-next-line anti-slop/no-runtime-typeof -- Public evaluator boundary validates untrusted JSON fields before classification.
+const string = (v) => typeof v === "string";
+// oxlint-disable-next-line anti-slop/no-runtime-typeof -- Reject non-object records at the public evidence boundary.
+const record = (v) => v !== null && typeof v === "object";
+const mib = 1024 ** 2;
+const finite = (n) => Number.isFinite(n) && n >= 0;
+const integer = (n) => finite(n) && Number.isSafeInteger(n);
+const utc = (s) =>
+  string(s) &&
+  /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/u.test(s) &&
+  Number.isFinite(Date.parse(s));
+const hash = (s) => string(s) && /^(?:sha256:)?[a-f0-9]{64}$/u.test(s);
+const runId = (s) => string(s) && /^[a-z0-9-]{1,64}$/u.test(s);
+const list = (v) => (Array.isArray(v) ? v : []);
+const combine = (values) => {
+  if (values.includes("FAIL")) {
+    return "FAIL";
+  }
+  return values.includes("BLOCKED") ? "BLOCKED" : "PASS";
+};
+const duration = (start, end) =>
+  utc(start) && utc(end) && Date.parse(end) >= Date.parse(start)
+    ? Date.parse(end) - Date.parse(start)
+    : undefined;
+const summary = (values) => {
+  const sorted = values.filter(finite).toSorted((a, b) => a - b);
+  return {
+    count: sorted.length,
+    p95_ms: sorted.length ? sorted[Math.ceil(sorted.length * 0.95) - 1] : null,
+  };
+};
+const state = () => {
+  const reasons = [];
+  return {
+    fail: (bad, reason) => {
+      if (
+        bad &&
+        !reasons.some((v) => v.status === "FAIL" && v.reason === reason)
+      ) {
+        reasons.push({ reason, status: "FAIL" });
+      }
+    },
+    need: (ok, reason) => {
+      if (
+        !ok &&
+        !reasons.some((v) => v.status === "BLOCKED" && v.reason === reason)
+      ) {
+        reasons.push({ reason, status: "BLOCKED" });
+      }
+    },
+    reasons,
+    verdict: () => combine(reasons.map((r) => r.status)),
+  };
+};
+const required = (s, e, names) => {
+  for (const name of names) {
+    const c = e.manifest?.checks?.[name];
+    s.fail(c?.passed === false, `required check failed: ${name}`);
+    s.need(
+      c?.passed === true && c.run_id === e.run_id && hash(c.sha256),
+      `required check missing: ${name}`
+    );
+    s.fail(
+      c?.run_id !== undefined && c.run_id !== e.run_id,
+      "required check run mismatch"
+    );
+  }
+};
+const windows = (e) => list(e.manifest?.induced_windows);
+const validWindow = (w, e) =>
+  ["restart", "restore", "wal-fault"].includes(w?.kind) &&
+  w.run_id === e.run_id &&
+  w.ownership_verified === true &&
+  hash(w.ownership_sha256) &&
+  utc(w.declared_at) &&
+  utc(w.started_at) &&
+  utc(w.completed_at) &&
+  Date.parse(w.declared_at) < Date.parse(w.started_at) &&
+  duration(w.started_at, w.completed_at) > 0 &&
+  w.recovery_check?.passed === true &&
+  hash(w.recovery_check.sha256) &&
+  w.recovery_check.run_id === e.run_id;
+const induced = (e, service, time) =>
+  utc(time) &&
+  services.includes(service) &&
+  windows(e).some(
+    (w) =>
+      validWindow(w, e) &&
+      w.service === service &&
+      Date.parse(time) >= Date.parse(w.started_at) &&
+      Date.parse(time) <= Date.parse(w.completed_at)
+  );
+const continuity = (s, rows, id) => {
+  s.fail(
+    rows.length > 0 && integer(rows[0]?.sequence) && rows[0].sequence !== 1,
+    "evidence sequence does not start at one"
+  );
+  for (const [i, row] of rows.entries()) {
+    s.need(runId(row?.run_id), "evidence run identity missing");
+    s.fail(
+      row?.run_id !== undefined && row.run_id !== id,
+      "mixed run identities"
+    );
+    s.need(integer(row?.sequence), "missing evidence sequence");
+    if (i) {
+      s.fail(
+        integer(row?.sequence) && row.sequence !== rows[i - 1].sequence + 1,
+        "evidence sequence gap or reset"
+      );
+    }
+  }
+};
+const exactHost = (h) =>
+  h?.id === 167_541_435 &&
+  h.name === "reltide-staging" &&
+  h.type === "cx23" &&
+  h.architecture === "x86" &&
+  h.location === "hel1" &&
+  h.private_ip === "172.30.0.3" &&
+  h.os === "Ubuntu 26.04";
+const native = (e) =>
+  e.manifest?.kind === "native-staging" &&
+  [e.load_manifest, e.integration, e.integration?.load, e.load].every(
+    (v) =>
+      !v ||
+      (v.capacity_pass !== false &&
+        !/local|pruning|shortened/u.test(v.kind ?? ""))
+  );
+
+const containerSample = (s, e, x, prev, c) => {
+  s.need(
+    string(c.id) &&
+      services.includes(c.service) &&
+      finite(c.cpu_busy_ratio) &&
+      finite(c.memory_bytes) &&
+      integer(c.restart_count) &&
+      [true, false].includes(c.running) &&
+      [true, false].includes(c.oom),
+    "partial container metrics"
+  );
+  const before = prev?.containers?.find((v) => v.service === c.service);
+  const disruption =
+    (c.running === false ||
+      (before
+        ? c.restart_count !== before.restart_count || c.id !== before.id
+        : c.restart_count > 0)) &&
+    induced(e, c.service, x.utc);
+  s.fail(
+    (c.running === false ||
+      (before
+        ? c.restart_count > before.restart_count
+        : c.restart_count > 0)) &&
+      !disruption,
+    "unexpected restart or exit"
+  );
+  s.fail(
+    before &&
+      (c.restart_count < before.restart_count || c.id !== before.id) &&
+      !disruption,
+    "container identity or counter reset"
+  );
+};
+const hostSample = (s, e, x, prev, cs) => {
+  s.need(
+    [
+      "monotonic_ms",
+      "mem_available_bytes",
+      "root_free_bytes",
+      "root_used_ratio",
+      "cpu_busy_ratio",
+      "oom_count",
+      "swap_in_bytes",
+      "swap_out_bytes",
+    ].every((k) => finite(x[k])) && utc(x.utc),
+    "partial host metrics"
+  );
+  s.need(
+    finite(Math.abs(x.clock_offset_ms)) && Math.abs(x.clock_offset_ms) <= 1000,
+    "clock synchronization missing"
+  );
+  s.fail(
+    finite(x.mem_available_bytes) && x.mem_available_bytes < 512 * mib,
+    "available memory below 512 MiB"
+  );
+  s.fail(
+    x.root_used_ratio > 0.7 ||
+      (finite(x.root_free_bytes) && x.root_free_bytes < 10 * 1024 * mib),
+    "root disk guard exceeded"
+  );
+  s.fail(x.oom_count > 0 || cs.some((c) => c.oom === true), "OOM detected");
+  s.fail(x.cpu_busy_ratio > 1 || x.root_used_ratio > 1, "invalid host ratios");
+  s.need(
+    services.every((service) => cs.some((c) => c.service === service)),
+    "steady service missing"
+  );
+  s.fail(
+    new Set(cs.map((c) => c.id)).size !== cs.length,
+    "duplicate container identity"
+  );
+
+  for (const c of cs) {
+    containerSample(s, e, x, prev, c);
+  }
+};
+const sampleInterval = (s, x, prev) => {
+  const delta = x.monotonic_ms - prev.monotonic_ms;
+  s.need(
+    finite(delta) && delta > 0 && delta <= 1500,
+    "one-second sample cadence incomplete"
+  );
+  s.fail(
+    (finite(delta) && delta === 0) || delta < 0,
+    "nonmonotonic host samples"
+  );
+  s.need(
+    utc(prev.utc) &&
+      Math.abs(Date.parse(x.utc) - Date.parse(prev.utc) - delta) <= 1000,
+    "UTC sample continuity missing"
+  );
+  s.fail(
+    ["oom_count", "swap_in_bytes", "swap_out_bytes"].some(
+      (k) => finite(x[k]) && finite(prev[k]) && x[k] < prev[k]
+    ),
+    "host counter reset"
+  );
+
+  return delta;
+};
+const resourceWindow = (s, x, prev, delta, queues, totals, peaks) => {
+  for (const [key, limit] of [
+    ["one_minute", 60_000],
+    ["five_minute", 300_000],
+  ]) {
+    const q = queues[key];
+    q.push({
+      cpu: x.cpu_busy_ratio,
+      delta,
+      end: x.monotonic_ms,
+      swap:
+        x.swap_in_bytes > prev.swap_in_bytes ||
+        x.swap_out_bytes > prev.swap_out_bytes,
+    });
+    totals[key] += delta;
+    while (q.length && x.monotonic_ms - q[0].end >= limit) {
+      totals[key] -= q.shift().delta;
+    }
+    if (totals[key] >= limit) {
+      const cpu = q.reduce((sum, v) => sum + v.cpu * v.delta, 0) / totals[key];
+      const swap = q.some((v) => v.swap);
+      peaks[key].duration_ms = Math.max(peaks[key].duration_ms, totals[key]);
+      peaks[key].cpu_busy_ratio = Math.max(peaks[key].cpu_busy_ratio, cpu);
+      peaks[key].swap_active ||= swap;
+      s.fail(key === "five_minute" && cpu > 0.8, "five-minute CPU above 80%");
+      s.fail(key === "one_minute" && swap, "sustained swap activity");
+    }
+  }
+};
+const hostEvidence = (s, e, metrics) => {
+  const samples = list(e.host_samples);
+  s.need(samples.length > 0, "host samples missing");
+  continuity(s, samples, e.run_id);
+  const queues = { five_minute: [], one_minute: [] };
+  const totals = { five_minute: 0, one_minute: 0 };
+  const peaks = {
+    five_minute: { cpu_busy_ratio: 0, duration_ms: 0, swap_active: false },
+    one_minute: { cpu_busy_ratio: 0, duration_ms: 0, swap_active: false },
+  };
+  for (const [i, x] of samples.entries()) {
+    const prev = samples[i - 1];
+    const cs = list(x.containers).filter((v) => v && record(v));
+    hostSample(s, e, x, prev, cs);
+    if (!prev) {
+      continue;
+    }
+    const delta = sampleInterval(s, x, prev);
+    if (!(delta > 0 && delta <= 1500 && finite(x.cpu_busy_ratio))) {
+      continue;
+    }
+    resourceWindow(s, x, prev, delta, queues, totals, peaks);
+  }
+  const phases = list(e.manifest?.phases);
+  const start = phases[0]?.started_at;
+  const end = phases.at(-1)?.completed_at;
+  s.need(
+    samples.length > 0 &&
+      utc(start) &&
+      utc(end) &&
+      Date.parse(samples[0].utc) <= Date.parse(start) &&
+      Date.parse(samples.at(-1).utc) >= Date.parse(end),
+    "host samples truncated"
+  );
+  metrics.resource_windows = peaks;
+  for (const c of list(e.integration?.containers)) {
+    s.fail(c.oom === true, "OOM detected");
+    s.fail(c.restart_count > 0, "unexpected integration restart");
+  }
+};
+const phaseEvidence = (s, e) => {
+  const phases = list(e.manifest?.phases);
+  const expected = [
+    ["idle", 900_000, 0],
+    ["ramp-1", 600_000, 1],
+    ["ramp-3", 600_000, 3],
+    ["ramp-5", 600_000, 5],
+    ["soak", 7_200_000, 5],
+    ["final", 900_000, 5],
+  ];
+  s.need(phases.length === 6, "required phases missing");
+  for (const [i, [name, ms, rate]] of expected.entries()) {
+    const p = phases[i];
+    s.need(
+      p?.name === name &&
+        integer(p.duration_ms) &&
+        p.http_rps === rate &&
+        p.duration_ms >= ms &&
+        duration(p.started_at, p.completed_at) >= ms,
+      "phase duration/rate incomplete"
+    );
+    if (i && p) {
+      s.need(
+        phases[i - 1]?.completed_at === p.started_at,
+        "phase continuity incomplete"
+      );
+    }
+  }
+  s.need(exactHost(e.manifest?.host), "native staging host identity missing");
+  s.fail(
+    e.manifest?.host !== undefined && !exactHost(e.manifest.host),
+    "wrong target host identity"
+  );
+  s.need(
+    hash(e.manifest?.config_sha256) &&
+      services.every((k) => hash(e.manifest?.images?.[k])),
+    "image/config hashes missing"
+  );
+  s.need(native(e), "native staging measurements missing");
+  for (const [key, want] of Object.entries({
+    aged_events: 25_920,
+    analytics_rows: 10_000,
+    current_events: 2_592_000,
+    ledger_rows: 100_000,
+  })) {
+    const value = e.manifest?.seed?.[key];
+    s.need(value !== undefined, "seed declaration missing");
+    s.fail(
+      value !== undefined && value !== want,
+      "seed declaration contradicts prescribed fixture"
+    );
+  }
+  required(s, e, [
+    "baseline",
+    "limits",
+    "load_counts",
+    "seed_counts",
+    "initializer",
+  ]);
+};
+const httpMetrics = (s, e, metrics) => {
+  metrics.http = {};
+  const requests = e.load_manifest?.requests ?? e.manifest?.requests;
+  for (const group of ["app", "web", "docs", "api"]) {
+    const urls = list(requests?.[group]);
+    s.need(urls.length > 0, "HTTP endpoint manifest missing");
+    for (const [index, url] of urls.entries()) {
+      const events = list(e.events).filter(
+        (v) => v.kind === "http" && v.url === url && v.outcome === "completed"
+      );
+      const values = events.map((v) => duration(v.accepted_at, v.completed_at));
+      const m = summary(values);
+      const key = index === 0 ? group : `${group}_${index}`;
+      metrics.http[key] = m;
+      s.need(m.count > 0 && m.count === events.length, "HTTP timings missing");
+      s.fail(m.p95_ms > 500, "HTTP p95 above 500 ms");
+    }
+  }
+  for (const v of list(e.events)) {
+    if (v.kind !== "http") {
+      continue;
+    }
+    const failed =
+      v.status >= 500 ||
+      v.outcome === "failed" ||
+      v.outcome === "timeout" ||
+      v.timeout === true;
+    s.fail(
+      failed && !induced(e, v.service, v.completed_at),
+      "unexpected HTTP failure"
+    );
+    s.need(
+      v.outcome !== "completed" || integer(v.status),
+      "HTTP status missing"
+    );
+  }
+};
+const workloadMetrics = (s, e, metrics) => {
+  const completed = list(e.events).filter(
+    (v) => v.kind === "workflow_completed"
+  );
+  const delays = completed.map((v) => v.scheduling_delay_ms);
+  const times = completed.map((v) => duration(v.accepted_at, v.completed_at));
+  metrics.workflow_delay = summary(delays);
+  metrics.workflow_completion = summary(times);
+  s.need(
+    completed.length > 0 && delays.every(finite) && times.every(finite),
+    "workflow timing evidence missing"
+  );
+  s.fail(
+    metrics.workflow_delay.p95_ms > 5000,
+    "workflow delay p95 above 5 seconds"
+  );
+  s.fail(
+    metrics.workflow_completion.p95_ms > 10_000,
+    "workflow completion p95 above 10 seconds"
+  );
+  const telemetry = list(e.events).filter(
+    (v) =>
+      v.kind === "telemetry_stored" &&
+      list(e.manifest?.phases).some((p) => p.name === v.phase && p.http_rps > 0)
+  );
+  const lags = [];
+  for (const v of telemetry) {
+    for (const proof of list(v.proofs)) {
+      const lag = Date.parse(proof.stored_at) - proof.event_time_ms?.[0];
+      s.need(finite(lag), "telemetry search timing missing");
+      s.fail(
+        proof.checksum_errors > 0 || lag > 30_000,
+        "telemetry verification/search delay failed"
+      );
+      if (finite(lag)) {
+        lags.push(lag);
+      }
+    }
+  }
+  metrics.telemetry_searchable = summary(lags);
+  s.need(lags.length > 0, "steady telemetry search evidence missing");
+  for (const v of list(e.events)) {
+    s.fail(
+      (v.outcome === "failed" || v.outcome === "timeout") &&
+        !induced(e, v.service, v.completed_at),
+      "unexpected operation failure"
+    );
+    s.fail(v.rejected > 0 || v.dropped > 0, "telemetry dropped or rejected");
+    s.fail(
+      v.kind === "guard_trigger" && v.guard?.stop === true,
+      "load guard stopped run"
+    );
+  }
+  const rows = list(e.collector);
+  continuity(s, rows, e.run_id);
+  s.need(rows.length >= 2, "collector counters missing");
+  for (const [i, c] of rows.entries()) {
+    s.need(
+      ["accepted", "dropped", "rejected"].every((k) => integer(c[k])),
+      "partial collector counters"
+    );
+    s.fail(c.dropped > 0 || c.rejected > 0, "collector dropped or rejected");
+    if (i) {
+      s.fail(
+        ["accepted", "dropped", "rejected"].some((k) => c[k] < rows[i - 1][k]),
+        "collector counter reset"
+      );
+    }
+  }
+};
+const producerCounters = (s, e) => {
+  let previous;
+  for (const event of list(e.events).filter((v) =>
+    v.kind?.startsWith("collector_")
+  )) {
+    if (!string(event.metrics)) {
+      continue;
+    }
+    const current = new Map();
+    for (const line of event.metrics.split("\n")) {
+      const match =
+        /^(?<name>otelcol_[a-z_]+)(?<labels>\{[^}]*\})? (?<raw>\d+(?:\.\d+)?)(?: .*|)$/u.exec(
+          line
+        );
+      if (!match) {
+        continue;
+      }
+      const { name, labels = "", raw } = match.groups;
+      const value = Number(raw);
+      if (/refused|dropped|failed/u.test(name)) {
+        s.fail(value > 0, "collector dropped, refused or failed");
+      }
+      if (/accepted|refused|dropped|failed|sent/u.test(name)) {
+        current.set(name + labels, value);
+      }
+    }
+    if (previous) {
+      for (const [key, value] of previous) {
+        s.need(current.has(key), "collector counter disappeared");
+        s.fail(
+          current.has(key) && current.get(key) < value,
+          "collector counter reset"
+        );
+      }
+    }
+    previous = current;
+  }
+};
+const measuredCoverage = (s, e, metrics) => {
+  metrics.phase_counts = [];
+  for (const p of list(e.manifest?.phases)) {
+    const events = list(e.events).filter((v) => v.phase === p.name);
+    const http = events.filter(
+      (v) => v.kind === "http" && v.outcome === "completed"
+    ).length;
+    const telemetry = events
+      .filter((v) => v.kind === "telemetry_stored")
+      .reduce((sum, v) => sum + (integer(v.stored) ? v.stored : 0), 0);
+    s.need(
+      http >= (p.duration_ms * p.http_rps) / 1000,
+      "realized phase HTTP coverage incomplete"
+    );
+    s.need(
+      p.http_rps === 0 || telemetry >= p.duration_ms / 100,
+      "realized phase telemetry coverage incomplete"
+    );
+    metrics.phase_counts.push({
+      http,
+      phase: ["idle", "ramp-1", "ramp-3", "ramp-5", "soak", "final"].includes(
+        p.name
+      )
+        ? p.name
+        : null,
+      telemetry,
+    });
+  }
+  for (const [cohort, count] of [
+    ["current", 2_592_000],
+    ["aged", 25_920],
+  ]) {
+    const accepted = list(e.events)
+      .filter(
+        (v) =>
+          v.kind === "telemetry_accepted" &&
+          v.phase === "seed" &&
+          v.cohort === cohort
+      )
+      .reduce((sum, v) => sum + (integer(v.accepted) ? v.accepted : 0), 0);
+    s.need(accepted === count, "prescribed seed coverage incomplete");
+  }
+};
+const realPushdown = (plan, fixture) => {
+  if (!plan || !record(plan)) {
+    return false;
+  }
+  if (Array.isArray(plan)) {
+    return plan.some((v) => realPushdown(v, fixture));
+  }
+  if (plan["Node Type"] === "Aggregate") {
+    return false;
+  }
+  const sql = plan["Remote SQL"];
+  if (string(sql)) {
+    const normalized = sql.toLowerCase().replaceAll(/[\s"()]/gu, "");
+    const prefix =
+      "selectcount*,minsequence,maxsequencefromcapacity_analytics.ledger_samplewhere";
+    const predicates = normalized
+      .slice(prefix.length, -6)
+      .replace(`run_id='${fixture}'`, "run_id=fixture")
+      .split("and")
+      .toSorted();
+    return (
+      normalized.startsWith(prefix) &&
+      normalized.endsWith("limit1") &&
+      isDeepStrictEqual(predicates, [
+        "run_id=fixture",
+        "sequence<=10000",
+        "sequence>=1",
+      ])
+    );
+  }
+  return Object.values(plan).some((v) => realPushdown(v, fixture));
+};
+const fixtureRows = (s, v) => {
+  for (const [key, want] of [
+    ["rows", 10_000],
+    ["min_sequence", 1],
+    ["max_sequence", 10_000],
+  ]) {
+    s.need(integer(v[key]), "analytics fixture measurement missing");
+    s.fail(
+      v[key] !== undefined && v[key] !== want,
+      "analytics fixture mismatch"
+    );
+  }
+};
+const analyticsOutput = (s, v, fixture) => {
+  fixtureRows(s, v);
+  s.need(
+    [true, false].includes(v.pushdown) && v.explain !== undefined,
+    "pushdown proof missing"
+  );
+  s.fail(
+    v.pushdown === false ||
+      (v.explain !== undefined &&
+        runId(fixture) &&
+        !realPushdown(v.explain, fixture)),
+    "false or failed pushdown claim"
+  );
+  s.need(Array.isArray(v.sample), "analytics type mapping missing");
+  s.fail(
+    Array.isArray(v.sample) &&
+      (v.sample.length !== 10 ||
+        v.sample.some(
+          (row, i) =>
+            (runId(fixture) && row.run_id !== fixture) || row.sequence !== i + 1
+        )),
+    "analytics type mapping or run mismatch"
+  );
+  s.need(
+    v.library_version !== undefined && v.sql_version !== undefined,
+    "extension versions missing"
+  );
+  s.fail(
+    (v.library_version !== undefined && v.library_version !== "0.10.0") ||
+      (v.sql_version !== undefined && v.sql_version !== "0.10"),
+    "extension version mismatch"
+  );
+};
+const analyticsEvidence = (s, e, metrics) => {
+  const direct = e.integration?.load?.direct ?? e.load?.direct;
+  if (direct) {
+    fixtureRows(s, direct);
+  }
+  const outputs = [];
+  const searches = [];
+  const fixture = e.manifest?.fixture_run_id;
+  s.need(runId(fixture), "analytics fixture relationship missing");
+  for (const v of list(e.events)) {
+    if (v.kind === "probe_output" && v.rows !== undefined) {
+      outputs.push(v);
+    }
+    if (v.analytics) {
+      s.fail(
+        runId(fixture) && v.analytics.run_id !== fixture,
+        "nested analytics run mismatch"
+      );
+      outputs.push(v.analytics);
+    }
+    if (v.search) {
+      searches.push(v.search);
+    }
+  }
+  s.need(outputs.length > 0, "analytics output missing");
+  for (const v of outputs) {
+    analyticsOutput(s, v, fixture);
+  }
+  metrics.foreign_query = summary(outputs.map((v) => v.elapsed_ms));
+  metrics.hyperdx = summary(searches.map((v) => v.elapsed_ms));
+  s.need(
+    outputs.every((v) => finite(v.elapsed_ms)),
+    "foreign query timing missing"
+  );
+  s.need(
+    searches.length > 0 && searches.every((v) => finite(v.elapsed_ms)),
+    "separate HyperDX timing missing"
+  );
+  s.fail(
+    metrics.foreign_query.p95_ms > 2000 || metrics.hyperdx.p95_ms > 2000,
+    "analytics p95 above 2 seconds"
+  );
+  required(s, e, [
+    "least_privilege",
+    "outage_isolation",
+    "extension_after_restore",
+  ]);
+};
+const ordinaryRetention = (s, e, metrics) => {
+  const before = list(e.events).find(
+    (v) => v.kind === "ordinary_expiry_baseline"
+  );
+  const after = list(e.events).find(
+    (v) => v.kind === "ordinary_expiry_verified"
+  );
+  s.need(before && after, "ordinary expiry evidence incomplete");
+  const inventory = list(e.retention?.tables);
+  const names = [
+    "otel_logs",
+    "otel_traces",
+    "otel_traces_trace_id_ts",
+    "otel_metrics_exponential_histogram",
+    "otel_metrics_gauge",
+    "otel_metrics_histogram",
+    "otel_metrics_sum",
+    "otel_metrics_summary",
+  ];
+  s.need(
+    names.every((name) =>
+      inventory.some(
+        (v) => v.name === name && v.ttl_days === 3 && hash(v.ddl_sha256)
+      )
+    ),
+    "complete data-table TTL inventory missing"
+  );
+  s.fail(
+    inventory.some((v) => finite(v.ttl_days) && v.ttl_days !== 3),
+    "data-table TTL is not three days"
+  );
+  metrics.retention = {
+    ordinary_expiry_verified: false,
+    prepared_fixture_present: Boolean(
+      e.integration?.aged_fixture_retention || e.load?.prepared_expiry
+    ),
+    tables: inventory
+      .filter((v) => names.includes(v.name))
+      .map((v) => ({
+        ddl_sha256: hash(v.ddl_sha256) ? v.ddl_sha256 : null,
+        name: v.name,
+        ttl_days: finite(v.ttl_days) ? v.ttl_days : null,
+      })),
+  };
+  if (!before || !after) {
+    return;
+  }
+  const baseline = before.retention;
+  s.need(
+    list(baseline?.ttls).length === 2 &&
+      list(baseline?.mutations).every((v) => Number(v.is_done) === 1),
+    "ordinary TTL baseline incomplete"
+  );
+  s.fail(
+    list(baseline?.ttls).some((v) => !/TTL .*toIntervalDay\(3\)/u.test(v.ddl)),
+    "ordinary baseline TTL is not three days"
+  );
+  s.fail(
+    JSON.stringify(baseline) !== JSON.stringify(after.retention),
+    "ordinary TTL changed"
+  );
+  s.fail(after.elapsed_ms > 3_600_000, "ordinary expiry exceeded one hour");
+  const boundary = Date.parse(before.last_event_expired_after);
+  const observations = list(e.events).filter(
+    (v) => v.kind === "normal_expiry_observation" && v.cohort === "boundary"
+  );
+  const stored = observations.some(
+    (v) => v.remaining > 0 && Date.parse(v.observed_at) < boundary
+  );
+  const expired = observations.some(
+    (v) =>
+      v.remaining === 0 &&
+      Date.parse(v.observed_at) >= boundary &&
+      Date.parse(v.observed_at) - boundary <= 3_600_000
+  );
+  s.need(
+    stored && expired && after.expired > 0,
+    "ordinary expiry storage/boundary proof missing"
+  );
+  metrics.retention.ordinary_expiry_verified = stored && expired;
+};
+const restoreCompatibility = (s, r, receipts) => {
+  s.need(Array.isArray(r.extensions), "restored extension identity missing");
+  if (Array.isArray(r.extensions)) {
+    s.fail(
+      receipts.some((v) => !isDeepStrictEqual(v.extensions, r.extensions)),
+      "restored extension receipt mismatch"
+    );
+  }
+  s.need(hash(r.checks?.sha256), "restore check evidence hash missing");
+  s.need(
+    r.ownership_verified === true && hash(r.ownership_sha256),
+    "fresh restore volume ownership missing"
+  );
+  s.fail(r.ownership_verified === false, "restore target not owned");
+  const elapsed = duration(r.started_at, r.healthy_at);
+  s.need(finite(elapsed), "restore wall-clock timing missing");
+  s.fail(
+    finite(elapsed) && elapsed > 1_800_000,
+    "restore wall-clock RTO exceeded"
+  );
+  s.fail(
+    finite(elapsed) &&
+      finite(r.rto_seconds) &&
+      Math.abs(elapsed / 1000 - r.rto_seconds) > 1,
+    "restore RTO contradicts measured interval"
+  );
+};
+const retentionEvidence = (s, e, metrics) => {
+  const load = e.integration?.load ?? e.load;
+  const a = load?.accounting;
+  s.need(
+    a &&
+      [
+        "accepted",
+        "stored",
+        "expired",
+        "pending",
+        "dropped",
+        "service_generated",
+      ].every((k) => integer(a[k])),
+    "telemetry accounting missing"
+  );
+  if (a) {
+    const admissions = list(e.events).filter(
+      (v) => v.kind === "telemetry_accepted"
+    );
+    const accepted = admissions.reduce(
+      (sum, v) => sum + (integer(v.accepted) ? v.accepted : 0),
+      0
+    );
+    s.fail(
+      admissions.length > 0 && integer(a.accepted) && a.accepted !== accepted,
+      "accounting contradicts accepted event totals"
+    );
+    s.fail(a.dropped > 0, "accounted drops");
+    s.fail(
+      integer(a.accepted) &&
+        integer(a.stored) &&
+        integer(a.expired) &&
+        integer(a.pending) &&
+        a.accepted !== a.stored + a.expired + a.pending + a.dropped,
+      "telemetry accounting mismatch"
+    );
+    s.need(a.pending === 0, "telemetry still pending");
+    metrics.accounting = Object.fromEntries(
+      [
+        "accepted",
+        "stored",
+        "expired",
+        "pending",
+        "dropped",
+        "service_generated",
+      ].map((k) => [k, integer(a[k]) ? a[k] : null])
+    );
+  }
+  const p = load?.projection;
+  s.need(
+    !p || p.label === "growth projection, not measured three-day capacity",
+    "unlabelled growth projection"
+  );
+  if (p) {
+    metrics.projection = {
+      label: "growth projection, not measured three-day capacity",
+      observed_stored_bytes: finite(p.observed_stored_bytes)
+        ? p.observed_stored_bytes
+        : null,
+      projected_three_day_bytes: finite(p.projected_three_day_bytes)
+        ? p.projected_three_day_bytes
+        : null,
+    };
+  }
+  ordinaryRetention(s, e, metrics);
+  required(s, e, ["retention"]);
+};
+const validReceipt = (r) =>
+  string(r.server_version) &&
+  /^\d+(?:\.\d+)*$/u.test(r.server_version) &&
+  /^\d+$/u.test(r.system_identifier ?? "") &&
+  integer(r.timeline) &&
+  r.timeline > 0 &&
+  runId(r.base_id) &&
+  list(r.wal_range).length === 2 &&
+  r.wal_range.every((v) => /^[\dA-F]+\/[\dA-F]+$/u.test(v)) &&
+  hash(r.encrypted_sha256) &&
+  integer(r.bytes) &&
+  r.bytes > 0 &&
+  utc(r.uploaded_at) &&
+  integer(r.operations_reserved?.class_a) &&
+  integer(r.operations_reserved?.class_b);
+const backupReceipt = (s, e, r, kind, metrics) => {
+  s.fail(r.run_id !== e.run_id, "backup run mismatch");
+  s.need(validReceipt(r), "backup receipt incomplete");
+  s.fail(r.bytes > 256 * mib, "base archive above 256 MiB");
+  s.fail(r.download_verified === false, "backup download verification failed");
+  s.need(
+    r.download_verified === true,
+    "external encrypted download verification missing"
+  );
+  s.need(Array.isArray(r.extensions), "backup extension manifest missing");
+  if (Array.isArray(r.extensions)) {
+    s.fail(
+      kind === "temporal" && r.extensions.length > 0,
+      "Temporal extension must be absent"
+    );
+    s.fail(
+      kind === "application" &&
+        (r.extensions.length !== 1 ||
+          r.extensions[0]?.name !== "pg_clickhouse" ||
+          r.extensions[0]?.library_version !== "0.10.0" ||
+          r.extensions[0]?.sql_version !== "0.10"),
+      "application backup extension mismatch"
+    );
+    s.need(
+      kind !== "application" || hash(r.extensions[0]?.image_digest),
+      "backup extension image hash missing"
+    );
+  }
+  if (hash(r.encrypted_sha256)) {
+    metrics.receipt_hashes.push(r.encrypted_sha256);
+  }
+};
+const backupEvidence = (s, e, metrics) => {
+  const receipts = list(e.backups);
+  metrics.receipt_hashes = [];
+  const hashes = receipts.map((r) => r.encrypted_sha256).filter(hash);
+  s.fail(
+    new Set(hashes).size !== hashes.length,
+    "backup ciphertext identities overlap"
+  );
+  for (const kind of ["application", "temporal"]) {
+    const matches = receipts.filter((r) => r.kind === kind);
+    s.need(matches.length > 0, `${kind} backup missing`);
+    for (const r of matches) {
+      backupReceipt(s, e, r, kind, metrics);
+    }
+  }
+  s.fail(
+    receipts.reduce((sum, r) => sum + (finite(r.bytes) ? r.bytes : 0), 0) > 1e9,
+    "backup storage above 1 GB"
+  );
+  for (const [key, max] of [
+    ["class_a", 5000],
+    ["class_b", 20_000],
+  ]) {
+    s.fail(
+      receipts.reduce(
+        (sum, r) => sum + (r.operations_reserved?.[key] ?? 0),
+        0
+      ) > max,
+      "backup operation budget exceeded"
+    );
+  }
+  required(s, e, ["wal_freshness", "encrypted_download", "backup_limits"]);
+};
+const restartEvidence = (s, e, metrics) => {
+  const rows = list(e.restarts).toSorted(
+    (a, b) => Date.parse(a.outage_start) - Date.parse(b.outage_start)
+  );
+  s.need(
+    services.every((service) => rows.some((r) => r.service === service)),
+    "service restart coverage missing"
+  );
+  metrics.restart_seconds = [];
+  for (const [index, r] of rows.entries()) {
+    const ms = duration(r.outage_start, r.healthy_at);
+    s.need(
+      induced(e, r.service, r.outage_start),
+      "restart declaration/ownership missing"
+    );
+    if (index) {
+      s.fail(
+        Date.parse(r.outage_start) - Date.parse(rows[index - 1].healthy_at) <
+          300_000,
+        "restart healthy interval below five minutes"
+      );
+    }
+    s.fail(r.run_id !== e.run_id, "restart run mismatch");
+    s.need(
+      services.includes(r.service) && finite(ms),
+      "restart timing missing"
+    );
+    s.fail(
+      ms > 120_000 || r.replay_result === false,
+      "restart readiness/replay failed"
+    );
+    s.need(
+      r.replay_result === true && r.healthy_window_seconds >= 300,
+      "restart replay/healthy window missing"
+    );
+    if (finite(ms)) {
+      metrics.restart_seconds.push(ms / 1000);
+    }
+  }
+  for (const w of windows(e)) {
+    s.need(validWindow(w, e), "induced window ownership/recovery missing");
+    s.fail(w.recovery_check?.passed === false, "induced recovery check failed");
+  }
+  required(s, e, ["restart_coverage", "restart_replay", "lost_ack_once"]);
+};
+const restoreSummary = (r, kind) => ({
+  coverage: "clean-volume recovery; not cold-host RTO",
+  kind,
+  lost_commits: integer(r.lost_commits) ? r.lost_commits : null,
+  recovery_cut: utc(r.recovery_cut) ? r.recovery_cut : null,
+  rpo_seconds: finite(r.rpo_seconds) ? r.rpo_seconds : null,
+  rto_seconds: finite(r.rto_seconds) ? r.rto_seconds : null,
+  watermark: {
+    committed_at: utc(r.watermark?.committed_at)
+      ? r.watermark.committed_at
+      : null,
+    sequence: integer(r.watermark?.sequence) ? r.watermark.sequence : null,
+    sha256: hash(r.watermark?.sha256) ? r.watermark.sha256 : null,
+  },
+});
+const validRestore = (r) =>
+  r.source_volume_unmounted === true &&
+  string(r.target_volume) &&
+  r.target_volume.startsWith("reltide-capacity-") &&
+  utc(r.recovery_cut) &&
+  integer(r.lost_commits) &&
+  finite(r.rpo_seconds) &&
+  finite(r.rto_seconds);
+const recoveryEvidence = (s, e, metrics) => {
+  const rows = list(e.restores);
+  metrics.restores = [];
+  for (const kind of ["application", "temporal"]) {
+    const matches = rows.filter((r) => r.kind === kind);
+    s.need(matches.length === 1, `${kind} restore missing`);
+    for (const r of matches) {
+      s.fail(r.run_id !== e.run_id, "restore run mismatch");
+      s.need(validRestore(r), "restore fields incomplete");
+      s.fail(
+        r.source_volume_unmounted === false ||
+          r.rpo_seconds > 300 ||
+          r.rto_seconds > 1800,
+        "restore protection/RPO/RTO failed"
+      );
+      const receipts = list(e.backups).filter((v) => v.kind === kind);
+      restoreCompatibility(s, r, receipts);
+      s.need(list(r.input_receipts).length > 0, "restore receipts missing");
+      s.fail(
+        list(r.input_receipts).some(
+          (h) => !hash(h) || !receipts.some((v) => v.encrypted_sha256 === h)
+        ),
+        "restore receipt mismatch"
+      );
+      for (const key of [
+        "passed",
+        "download_decrypt_verify_included",
+        "clean_volume",
+        "extension_compatible",
+      ]) {
+        s.need(r.checks?.[key] === true, "restore verification missing");
+        s.fail(r.checks?.[key] === false, "restore verification failed");
+      }
+      s.need(
+        integer(r.watermark?.sequence) &&
+          hash(r.watermark?.sha256) &&
+          utc(r.watermark?.committed_at),
+        "restore watermark missing"
+      );
+      if (utc(r.recovery_cut) && utc(r.watermark?.committed_at)) {
+        const loss =
+          (Date.parse(r.recovery_cut) - Date.parse(r.watermark.committed_at)) /
+          1000;
+        s.fail(loss > 300, "restore watermark loss above 300 seconds");
+        s.fail(
+          finite(r.rpo_seconds) && Math.abs(loss - r.rpo_seconds) > 1,
+          "restore RPO contradicts commit watermark"
+        );
+      }
+      metrics.restores.push(restoreSummary(r, kind));
+    }
+  }
+  s.fail(
+    new Set(rows.map((r) => r.recovery_cut)).size > 1,
+    "restore recovery cuts differ"
+  );
+  s.fail(
+    rows.length > 1 &&
+      new Set(rows.map((r) => r.target_volume)).size < rows.length,
+    "restore target volumes overlap"
+  );
+  required(s, e, [
+    "recovery_common_cut",
+    "recovery_volumes",
+    "recovery_checks",
+  ]);
+};
+const operationContinuity = (s, e) => {
+  const lanes = new Map();
+  for (const v of list(e.events)) {
+    s.fail(
+      v.probe_event?.run_id !== undefined && v.probe_event.run_id !== e.run_id,
+      "nested workflow run mismatch"
+    );
+    s.fail(
+      utc(v.accepted_at) &&
+        utc(v.completed_at) &&
+        Date.parse(v.completed_at) < Date.parse(v.accepted_at),
+      "operation completion precedes admission"
+    );
+    const key = `${v.phase}:${v.kind}`;
+    const count = lanes.get(key) ?? { submitted: 0, terminal: 0 };
+    if (v.outcome === "submitted") {
+      count.submitted += 1;
+    }
+    if (["completed", "failed", "cancelled", "timeout"].includes(v.outcome)) {
+      count.terminal += 1;
+    }
+    lanes.set(key, count);
+  }
+  s.need(
+    [...lanes.values()].every((v) => v.submitted <= v.terminal),
+    "submitted operation completion missing"
+  );
+};
+const artifactConsistency = (s, e) => {
+  for (const field of ["config_sha256", "requests"]) {
+    const actual = e.integration?.manifest?.[field] ?? e.load_manifest?.[field];
+    s.fail(
+      e.manifest?.[field] !== undefined &&
+        actual !== undefined &&
+        !isDeepStrictEqual(e.manifest[field], actual),
+      "native manifest contradicts producer artifact"
+    );
+  }
+  for (const name of services) {
+    const expected = e.manifest?.images?.[name];
+    const actual = e.integration?.manifest?.images?.[name];
+    s.fail(
+      hash(expected) &&
+        string(actual) &&
+        !actual.endsWith(expected.replace("sha256:", "")),
+      "native image contradicts producer artifact"
+    );
+  }
+};
+const evaluate = (input = {}) => {
+  const e = record(input) ? { ...input } : {};
+  const arrays = [
+    "events",
+    "host_samples",
+    "backups",
+    "restarts",
+    "restores",
+    "collector",
+  ];
+  const malformed = arrays.some(
+    (k) =>
+      e[k] !== undefined &&
+      (!Array.isArray(e[k]) || e[k].some((v) => !v || !record(v)))
+  );
+  for (const k of arrays) {
+    e[k] = list(e[k]).filter((v) => v && record(v));
+  }
+  const states = Object.fromEntries(components.map((k) => [k, state()]));
+  const metrics = {};
+  const integrity = state();
+  integrity.need(
+    e.schema_version === 1 && runId(e.run_id),
+    "versioned run envelope missing"
+  );
+  integrity.fail(
+    e.artifact_conflict === true,
+    "authoritative artifact contradicts envelope"
+  );
+  integrity.need(
+    !e.incomplete && !malformed,
+    "input artifact missing or malformed"
+  );
+  for (const v of [e.manifest, e.load_manifest, e.integration]) {
+    if (v?.run_id !== undefined) {
+      integrity.fail(v.run_id !== e.run_id, "mixed artifact run identities");
+    }
+  }
+  const ordered = list(e.events).toSorted((a, b) => a.sequence - b.sequence);
+  metrics.event_order = {
+    count: ordered.length,
+    physical_reordering: ordered.some((v, i) => v !== e.events[i]),
+  };
+  e.events = ordered;
+  continuity(integrity, ordered, e.run_id);
+  artifactConsistency(integrity, e);
+  for (const c of Object.values(e.manifest?.checks ?? {})) {
+    integrity.fail(c?.passed === false, "required check failed");
+  }
+  integrity.fail(
+    e.integration?.result === "FAIL" || e.integration?.result === "FAILED",
+    "integration failed"
+  );
+  const checks = {
+    analytics: [analyticsEvidence],
+    backup: [backupEvidence],
+    capacity: [
+      phaseEvidence,
+      hostEvidence,
+      httpMetrics,
+      workloadMetrics,
+      measuredCoverage,
+      producerCounters,
+      operationContinuity,
+    ],
+    recovery: [recoveryEvidence],
+    restart: [restartEvidence],
+    retention: [retentionEvidence],
+  };
+  for (const [name, functions] of Object.entries(checks)) {
+    for (const run of functions) {
+      try {
+        run(states[name], e, metrics);
+      } catch {
+        states[name].need(false, "malformed component evidence");
+      }
+    }
+  }
+  const verdicts = {};
+  const reasons = {};
+  for (const name of components) {
+    reasons[name] = [...integrity.reasons, ...states[name].reasons];
+    verdicts[name] = combine(reasons[name].map((v) => v.status));
+  }
+  verdicts.combined = combine(Object.values(verdicts));
+  return { metrics, reasons, verdicts };
+};
+export const evaluateRun = (evidence) => evaluate(evidence).verdicts;
+export const createReport = (evidence = {}) => {
+  const data = record(evidence) ? evidence : {};
+  return serializeReport(data, evaluate(data), {
+    host: exactHost(data.manifest?.host),
+    native: native(data),
+    windows: windows(data).map((w) => validWindow(w, data)),
+  });
+};
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+) {
+  if (process.argv.length !== 4 || process.argv[2] !== "--verdict") {
+    process.stderr.write(
+      "Usage: node tools/capacity/report.mjs --verdict <run-directory>\n"
+    );
+    process.exitCode = 2;
+  } else {
+    try {
+      const report = await writeReport(
+        process.argv[3],
+        createReport(await readEvidence(process.argv[3]))
+      );
+      process.stdout.write(`${report.verdicts.combined}\n`);
+      process.exitCode = { BLOCKED: 2, FAIL: 1, PASS: 0 }[
+        report.verdicts.combined
+      ];
+    } catch {
+      process.stderr.write(
+        "BLOCKED: evidence could not be evaluated or report could not be written\n"
+      );
+      process.exitCode = 2;
+    }
+  }
+}
