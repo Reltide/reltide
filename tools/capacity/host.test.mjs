@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  setImmediate as nextTurn,
+  setTimeout as sleep,
+} from "node:timers/promises";
 
 import { test } from "vitest";
 
@@ -13,6 +20,7 @@ import {
   readHostPreflight,
   recordOwnership,
   sampleHost,
+  volumeIdentity,
 } from "./host.mjs";
 
 const utc = "2026-09-30T10:00:00.000Z";
@@ -20,13 +28,25 @@ const labels = {
   "com.reltide.capacity.project": "reltide-capacity",
   "com.reltide.capacity.run": "test-1",
 };
-const resource = (kind, id, extra = {}) => ({
-  id,
-  identity: `${kind}-${id}-generation-1`,
-  kind,
-  labels,
-  ...extra,
-});
+const resource = (kind, id, extra = {}) => {
+  const value = { id, identity: `${kind}-${id}-generation-1`, kind, labels };
+  if (kind === "volume") {
+    Object.assign(value, {
+      docker_root_dir: "/var/lib/docker",
+      driver: "local",
+      generation: {
+        birth_time_ns: "1760000000123456789",
+        device: "1",
+        inode: "42",
+        is_directory: true,
+      },
+      mountpoint: `/var/lib/docker/volumes/${id}/_data`,
+      options: null,
+      scope: "local",
+    });
+  }
+  return { ...value, ...extra };
+};
 const observed = {
   resources: [
     resource("container", "c1"),
@@ -124,8 +144,11 @@ const manifest = {
   resource_limits: { total_memory_mib: 3072 },
 };
 
+const fixturePreflight = (value, host, stack) =>
+  preflight(value, host, stack, { now: Date.parse(utc) });
+
 test("preflight verifies protected purchased staging even when replacement stock is unavailable", () => {
-  assert.deepEqual(preflight(inventory, guest, manifest), []);
+  assert.deepEqual(fixturePreflight(inventory, guest, manifest), []);
 });
 
 test.each([
@@ -162,7 +185,7 @@ test.each([
 ])("preflight rejects %s", (_name, mutate) => {
   const value = structuredClone(inventory);
   mutate(value);
-  assert.ok(preflight(value, guest, manifest).length);
+  assert.ok(fixturePreflight(value, guest, manifest).length);
 });
 
 test.each([
@@ -211,7 +234,7 @@ test.each([
 ])("preflight rejects %s", (_name, mutate) => {
   const value = structuredClone(guest);
   mutate(value);
-  assert.ok(preflight(inventory, value, manifest).length);
+  assert.ok(fixturePreflight(inventory, value, manifest).length);
 });
 
 test("cleanup preserves unrelated, preexisting, replaced and source resources", () => {
@@ -223,7 +246,7 @@ test("cleanup preserves unrelated, preexisting, replaced and source resources", 
     []
   );
   const replaced = structuredClone(observed);
-  replaced.resources[1].identity = "replacement";
+  replaced.resources[1].generation.birth_time_ns = "1760000000987654321";
   assert.deepEqual(
     cleanupSelection(ownership, replaced).map((r) => r.id),
     ["c1", "n1"]
@@ -489,10 +512,13 @@ test("live collector verifies guest identity and uses a separate clock probe", a
 test("missing upstream kernel signature and uncertain clock evidence block preflight", () => {
   const value = structuredClone(guest);
   delete value.kernel_signature;
-  assert.ok(preflight(inventory, value, manifest).length);
+  assert.ok(fixturePreflight(inventory, value, manifest).length);
   assert.ok(
-    preflight(inventory, { ...guest, clock_uncertainty_ms: 1001 }, manifest)
-      .length
+    fixturePreflight(
+      inventory,
+      { ...guest, clock_uncertainty_ms: 1001 },
+      manifest
+    ).length
   );
 });
 
@@ -527,4 +553,249 @@ test("synchronous failure and aborted collection settle without unhandled reject
   } finally {
     process.off("unhandledRejection", onRejection);
   }
+});
+
+test("jittered cadence covers clipped CPU and swap windows", () => {
+  const values = Array.from({ length: 601 }, (_, index) =>
+    sample(index * 1001, {
+      cpu_busy_ratio: 0.9,
+      swap_in_bytes: index * 4096,
+    })
+  );
+  const result = evaluateGuard(values);
+  assert.equal(result.windows.five_minute.duration_ms, 300_000);
+  assert.equal(result.windows.one_minute.duration_ms, 60_000);
+  assert.ok(result.reasons.includes("five-minute CPU mean above 80%"));
+  assert.ok(result.reasons.includes("sustained swap activity"));
+});
+
+test("pruned jittered history retains the sample bracketing the five-minute boundary", async () => {
+  const controller = new AbortController();
+  let count = 0;
+  let busy = 0;
+  let idle = 0;
+  const result = await sampleHost({
+    collect: () => {
+      count += 1;
+      const high = count > 350;
+      busy += high ? 9 : 1;
+      idle += high ? 1 : 9;
+      if (count > 750) {
+        controller.abort();
+      }
+      return {
+        clock_offset_ms: 0,
+        containers: [],
+        cpu: [busy, 0, 0, idle, 0, 0, 0, 0],
+        mem_available_kib: 1_048_576,
+        monotonic_ms: count * 1001,
+        oom_count: 0,
+        page_size: 4096,
+        root_available: 20 * 1024 ** 3,
+        root_size: 100,
+        root_used: 30,
+        swap_in_pages: 0,
+        swap_out_pages: 0,
+        utc: new Date(Date.parse(utc) + count * 1001).toISOString(),
+      };
+    },
+    controller,
+    interval: () => {},
+    persist: () => {},
+    stopLoad: () => {},
+  });
+  assert.ok(result.reasons.includes("five-minute CPU mean above 80%"));
+  assert.ok(count < 750);
+});
+
+test.each(["stale", "external cancellation"])(
+  "hung persistence closes shared admission on %s",
+  async (cause) => {
+    const controller = new AbortController();
+    const external = new AbortController();
+    const entered = Promise.withResolvers();
+    const pending = Promise.withResolvers();
+    const closed = Promise.withResolvers();
+    let count = 0;
+    let stops = 0;
+    const work = sampleHost({
+      collect: () => {
+        count += 1;
+        return {
+          clock_offset_ms: 0,
+          containers: [],
+          cpu: [count, 0, 0, count * 9, 0, 0, 0, 0],
+          mem_available_kib: 1_048_576,
+          monotonic_ms: count * 1000,
+          oom_count: 0,
+          page_size: 4096,
+          root_available: 20 * 1024 ** 3,
+          root_size: 100,
+          root_used: 30,
+          swap_in_pages: 0,
+          swap_out_pages: 0,
+          utc: new Date(Date.parse(utc) + count * 1000).toISOString(),
+        };
+      },
+      controller,
+      interval: () => {},
+      persist: (value) => {
+        if (value.sample) {
+          entered.resolve();
+          return pending.promise;
+        }
+      },
+      signal: external.signal,
+      stopLoad: () => {
+        stops += 1;
+        closed.resolve();
+      },
+    });
+    await entered.promise;
+    if (cause === "external cancellation") {
+      external.abort();
+    }
+    const probe = Promise.withResolvers();
+    const timer = setTimeout(
+      () => {
+        probe.resolve(false);
+      },
+      cause === "stale" ? 3300 : 100
+    );
+    const stopping = async () => {
+      await closed.promise;
+      return true;
+    };
+    try {
+      const stopped = await Promise.race([stopping(), probe.promise]);
+      assert.equal(stopped, true);
+      assert.equal(controller.signal.aborted, true);
+      assert.equal(stops, 1);
+    } finally {
+      clearTimeout(timer);
+      external.abort();
+      pending.resolve();
+      await work;
+    }
+  },
+  5000
+);
+
+test("default preflight clock rejects equally stale inventory and guest evidence", () => {
+  const stale = "2020-01-01T00:00:00Z";
+  assert.ok(
+    preflight({ ...inventory, utc: stale }, { ...guest, utc: stale }, manifest)
+      .length
+  );
+});
+
+test("same-second volume replacement cannot retain its filesystem creation identity", async () => {
+  const dockerRoot = await mkdtemp(path.join(tmpdir(), "capacity-volume-"));
+  const mountpoint = path.join(dockerRoot, "volumes/v1/_data");
+  const make = async () => {
+    await mkdir(mountpoint, { recursive: true });
+    const value = await stat(mountpoint, { bigint: true });
+    return resource("volume", "v1", {
+      created_at: `${new Date(Number(value.birthtimeNs / 1_000_000n)).toISOString().slice(0, 19)}Z`,
+      docker_root_dir: dockerRoot,
+      driver: "local",
+      generation: {
+        birth_time_ns: String(value.birthtimeNs),
+        device: String(value.dev),
+        inode: String(value.ino),
+        is_directory: true,
+      },
+      mountpoint,
+      options: null,
+      scope: "local",
+    });
+  };
+  try {
+    // Keep both real creations clear of the next Docker timestamp boundary.
+    if (Date.now() % 1000 > 800) {
+      await sleep(1000 - (Date.now() % 1000));
+    }
+    const first = await make();
+    const manifestBefore = recordOwnership(
+      "test-1",
+      { resources: [], server_id: 167_541_435 },
+      { resources: [first], server_id: 167_541_435 }
+    );
+    await rm(mountpoint, { recursive: true });
+    const replacement = await make();
+    // These are the exact fields in the old Docker-derived fingerprint.
+    assert.equal(first.created_at, replacement.created_at);
+    assert.equal(first.identity, replacement.identity);
+    assert.deepEqual(
+      cleanupSelection(manifestBefore, {
+        resources: [replacement],
+        server_id: 167_541_435,
+      }),
+      []
+    );
+    assert.notEqual(volumeIdentity(first), volumeIdentity(replacement));
+  } finally {
+    await rm(dockerRoot, { recursive: true });
+  }
+});
+
+test("guest volume collector preserves nanosecond generation after container stats", async () => {
+  let script;
+  await collectHost({
+    inventory,
+    run: (_program, args) => {
+      const remote = args.at(-1);
+      if (remote.includes("docker")) {
+        script = remote;
+        return JSON.stringify({
+          ...guest,
+          raw: { ...sample(), cpu: [1, 0, 0, 9, 0, 0, 0, 0] },
+        });
+      }
+      return JSON.stringify({ utc: new Date().toISOString() });
+    },
+  });
+  // Execute the actual volume block offline, with Docker and host observations
+  // replaced at their boundaries. A preceding container sets the existing stat.
+  const harness = String.raw`
+import shlex, sys, types
+script = shlex.split(sys.argv[1])[2]
+exec(script.strip().splitlines()[0])
+stat = {'CPUPerc': '1.0%'}
+resources = []
+docker = lambda args: '/var/lib/docker' if args[0] == 'info' else 'v1' if args[0] == 'volume' else ''
+inspect = lambda kind, ids: [dict(Name='v1', Driver='local', Scope='local', Options=None, Mountpoint='/var/lib/docker/volumes/v1/_data', Labels={})] if ids else []
+labels = lambda value: value
+os.lstat = lambda name: types.SimpleNamespace(st_mode=0o40755)
+command = lambda args: '2049|12345|2026-09-30 10:00:00.123456789 +0000'
+exec(script[script.index('docker_root ='):script.index('mem = dict')])
+print(json.dumps(resources))
+`;
+  const [volume] = JSON.parse(
+    execFileSync("python3", ["-c", harness, script], { encoding: "utf-8" })
+  );
+  assert.deepEqual(volume.generation, {
+    birth_time_ns: "1790762400123456789",
+    device: "2049",
+    inode: "12345",
+    is_directory: true,
+  });
+});
+
+test("volume generation must be available independently of Docker labels and timestamps", () => {
+  const unknown = resource("volume", "v1", { generation: null });
+  assert.deepEqual(
+    cleanupSelection(ownership, {
+      resources: [unknown],
+      server_id: 167_541_435,
+    }),
+    []
+  );
+  assert.throws(() =>
+    recordOwnership(
+      "test-1",
+      { resources: [], server_id: 167_541_435 },
+      { resources: [unknown], server_id: 167_541_435 }
+    )
+  );
 });

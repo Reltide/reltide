@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { once } from "node:events";
 import { isIP } from "node:net";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 
@@ -15,12 +16,70 @@ const runPattern = /^[a-z0-9-]{1,64}$/u;
 const mib = 1024 ** 2;
 const gib = 1024 ** 3;
 const nonnegative = (value) => Number.isFinite(value) && value >= 0;
+const volumeName = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u;
+const decimal = /^(?:0|[1-9][0-9]*)$/u;
+
+const defaultLocalVolume = (resource) =>
+  resource.driver === "local" &&
+  resource.scope === "local" &&
+  (resource.options === null ||
+    (resource.options &&
+      Object.getPrototypeOf(resource.options) === Object.prototype &&
+      Object.keys(resource.options).length === 0));
+
+/** Default local Docker volumes only. Birth time must carry sub-second precision;
+ * labels and Docker's second-resolution CreatedAt cannot prove a generation. */
+export const volumeIdentity = (resource) => {
+  if (!defaultLocalVolume(resource) || !volumeName.test(resource.id ?? "")) {
+    return null;
+  }
+  const { generation } = resource;
+  if (generation?.is_directory !== true) {
+    return null;
+  }
+  const integers = [
+    generation.device,
+    generation.inode,
+    generation.birth_time_ns,
+  ];
+  if (
+    !integers.every(
+      (value) => decimal.test(value) && BigInt(value).toString() === value
+    )
+  ) {
+    return null;
+  }
+  if (
+    generation.inode === "0" ||
+    BigInt(generation.birth_time_ns) % 1_000_000_000n === 0n
+  ) {
+    return null;
+  }
+  try {
+    const root = resource.docker_root_dir;
+    if (!path.posix.isAbsolute(root) || path.posix.normalize(root) !== root) {
+      return null;
+    }
+    if (
+      resource.mountpoint !==
+      path.posix.join(root, "volumes", resource.id, "_data")
+    ) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return `local-volume:${resource.mountpoint}:${integers.join(":")}`;
+};
+
+const resourceIdentity = (resource) =>
+  resource.kind === "volume" ? volumeIdentity(resource) : resource.identity;
 
 // No environment/configuration arrays are emitted: Docker inspect includes secrets.
 // This fixed, read-only program is also the sampler's collector. No user text is
 // substituted into the remote program, and no remote mutation command is exposed.
 const guestScript = String.raw`
-import datetime, json, os, platform, subprocess, time, urllib.request
+import datetime, json, os, platform, re, stat as filesystem_stat, subprocess, time, urllib.request
 def command(args):
     return subprocess.check_output(args, text=True, timeout=5).strip()
 def docker(args):
@@ -46,10 +105,24 @@ for c in containers:
         memory = int(open('/sys/fs/cgroup' + path + '/memory.current').read())
     metrics.append(dict(id=identity, memory_bytes=memory, cpu_busy_ratio=float(stat['CPUPerc'].rstrip('%'))/100 if stat else None,
         oom=c['State']['OOMKilled'], restart_count=c['RestartCount'], running=c['State']['Running']))
+docker_root = docker(['info','--format','{{.DockerRootDir}}'])
 for kind in ['volume','network']:
     for r in inspect(kind, docker([kind, 'ls', '-q']).split()):
-        identity = r['Id'] if kind == 'network' else '|'.join([r['CreatedAt'], r['Driver'], r['Scope'], r['Mountpoint']])
-        resources.append(dict(kind=kind, id=r.get('Id',r['Name']), identity=identity, labels=labels(r.get('Labels'))))
+        resource = dict(kind=kind, id=r.get('Id',r['Name']), identity=r.get('Id'), labels=labels(r.get('Labels')))
+        if kind == 'volume':
+            resource.update(driver=r['Driver'], scope=r['Scope'], options=r.get('Options'), mountpoint=r['Mountpoint'], docker_root_dir=docker_root, generation=None)
+            expected = os.path.join(docker_root, 'volumes', r['Name'], '_data')
+            if r['Driver'] == 'local' and r['Scope'] == 'local' and not r.get('Options') and r['Mountpoint'] == expected:
+                try:
+                    info = os.lstat(expected)
+                    device, inode, birth = command(['env', 'TZ=UTC', 'stat', '--format=%d|%i|%w', '--', expected]).split('|')
+                    parts = re.fullmatch(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.(\d{9}) ([+-]\d{4})', birth)
+                    if parts and filesystem_stat.S_ISDIR(info.st_mode) and not filesystem_stat.S_ISLNK(info.st_mode):
+                        seconds = int(datetime.datetime.strptime(parts[1] + ' ' + parts[3], '%Y-%m-%d %H:%M:%S %z').timestamp())
+                        resource['generation'] = dict(device=device, inode=inode, birth_time_ns=str(seconds * 1000000000 + int(parts[2])), is_directory=True)
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    pass  # Unknown generation is preserved, never selected for cleanup.
+        resources.append(resource)
 mem = dict(line.split(':',1) for line in open('/proc/meminfo'))
 vm = dict(line.split() for line in open('/proc/vmstat'))
 cpu = list(map(int, open('/proc/stat').readline().split()[1:9]))
@@ -200,27 +273,30 @@ const sampleContinuity = (previous, sample, reject) => {
 };
 const sampleWindow = (samples, duration) => {
   const latest = samples.at(-1);
-  const values = samples.filter(
-    (sample) =>
-      validSample(sample) &&
-      latest.monotonic_ms - sample.monotonic_ms <= duration
-  );
+  const values = samples.filter(validSample);
+  const boundary = latest?.monotonic_ms - duration;
   let weighted = 0;
   let elapsed = 0;
+  let swapActive = false;
   for (let index = 1; index < values.length; index += 1) {
-    const delta = values[index].monotonic_ms - values[index - 1].monotonic_ms;
-    weighted += values[index].cpu_busy_ratio * delta;
+    const previous = values[index - 1];
+    const current = values[index];
+    const delta =
+      current.monotonic_ms - Math.max(previous.monotonic_ms, boundary);
+    if (delta <= 0) {
+      continue;
+    }
+    weighted += current.cpu_busy_ratio * delta;
     elapsed += delta;
+    swapActive ||= ["swap_in_bytes", "swap_out_bytes"].some(
+      (key) => current[key] > previous[key]
+    );
   }
   return {
-    count: values.length,
+    count: values.filter((sample) => sample.monotonic_ms >= boundary).length,
     cpu_busy_ratio: elapsed ? weighted / elapsed : null,
     duration_ms: elapsed,
-    swap_active:
-      values.length > 1 &&
-      ["swap_in_bytes", "swap_out_bytes"].some(
-        (key) => values.at(-1)[key] > values[0][key]
-      ),
+    swap_active: swapActive,
   };
 };
 export const evaluateGuard = (
@@ -376,7 +452,7 @@ export const preflight = (
   inventory,
   guest,
   manifest,
-  { now = Date.parse(guest?.utc) } = {}
+  { now = Date.now() } = {}
 ) => {
   const checks = [
     ...guestIdentity(guest),
@@ -443,6 +519,11 @@ const readGuest = async ({ inventory, run, jump, signal }) => {
       )
     );
   const guest = await remote(guestScript);
+  for (const resource of guest.resources ?? []) {
+    if (resource.kind === "volume") {
+      resource.identity = volumeIdentity(resource);
+    }
+  }
   const identityErrors = guestIdentity(guest).filter(([valid]) => !valid);
   if (identityErrors.length) {
     throw new Error("guest identity unavailable or mismatched");
@@ -566,12 +647,12 @@ export const recordOwnership = (runId, before, after) => {
     if (
       !["container", "volume", "network"].includes(resource.kind) ||
       !resource.id ||
-      !resource.identity
+      !resourceIdentity(resource)
     ) {
       throw new Error("missing resource identity");
     }
     result[`${resource.kind}_ids`].push(resource.id);
-    result.resource_fingerprints[key] = resource.identity;
+    result.resource_fingerprints[key] = resourceIdentity(resource);
   }
   return result;
 };
@@ -592,8 +673,8 @@ export const cleanupSelection = (ownership, observed) => {
         ["container", "volume", "network"].includes(resource.kind) &&
         ownership[`${resource.kind}_ids`]?.includes(resource.id) &&
         owned(resource, ownership) &&
-        Boolean(resource.identity) &&
-        ownership.resource_fingerprints?.[key] === resource.identity &&
+        Boolean(resourceIdentity(resource)) &&
+        ownership.resource_fingerprints?.[key] === resourceIdentity(resource) &&
         !ownership.preexisting_ids?.includes(key) &&
         !(
           resource.kind === "volume" &&
@@ -630,9 +711,36 @@ export const guardStop = async ({
   /* eslint-enable no-await-in-loop */
 };
 
-/** The caller supplies remote collection and evidence persistence. One-second
- * cadence, bounded five-minute memory, and an AbortSignal for Task 4 admission.
- * Collection failure closes load immediately rather than waiting for a gap. */
+// The watchdog races the entire step, so stalled persistence and cancellation
+// close shared admission even after collection has completed.
+const samplingWatchdog = async (operation, { signal, onExpired }) => {
+  const timeout = new AbortController();
+  const completed = new AbortController();
+  const timer = setTimeout(() => {
+    timeout.abort();
+  }, 3000);
+  const deadline = signal
+    ? AbortSignal.any([signal, timeout.signal])
+    : timeout.signal;
+  const interrupted = async () => {
+    if (!deadline.aborted) {
+      await once(deadline, "abort", { signal: completed.signal });
+    }
+    await onExpired();
+    throw new Error("sampling cycle deadline/cancellation");
+  };
+  const invoke = async () => await operation(deadline);
+  try {
+    return await Promise.race([invoke(), interrupted()]);
+  } finally {
+    clearTimeout(timer);
+    completed.abort();
+  }
+};
+
+/** The watchdog covers collection, persistence and the one-second cadence wait.
+ * An external cancellation also closes the caller's shared admission signal.
+ * Pressure-triggered admission closure still allows bounded evidence saving. */
 export const sampleHost = async ({
   collect,
   persist,
@@ -642,6 +750,7 @@ export const sampleHost = async ({
   interval = delay,
 }) => {
   const samples = [];
+  const cancellation = new AbortController();
   let previous;
   let closed = false;
   let result = {
@@ -656,69 +765,100 @@ export const sampleHost = async ({
       await stopLoad(result, controller.signal);
     }
   };
-  try {
-    /* eslint-disable no-await-in-loop -- Sampling, admission closure and persistence must occur in observation order. */
-    while (true) {
-      if (signal?.aborted || controller.signal.aborted) {
-        break;
-      }
-      const start = performance.now();
-      const deadline = AbortSignal.any([
-        controller.signal,
-        AbortSignal.timeout(3000),
-        ...(signal ? [signal] : []),
-      ]);
-      const cancel = async () => {
-        await once(deadline, "abort");
-        throw new Error("sampling deadline/cancellation");
-      };
-      const cancelled = cancel();
-      const collection = async () => await collect({ signal: deadline });
-      const before = Date.now();
-      const raw = await Promise.race([collection(), cancelled]);
-      if (raw.clock_offset_ms === undefined) {
-        raw.clock_offset_ms = Date.parse(raw.utc) - (before + Date.now()) / 2;
-      }
-      if (previous) {
-        const sample = parseHostSample(raw, previous);
-        samples.push(sample);
-        result = evaluateGuard(samples);
-        if (result.stop) {
-          await close();
-        }
-        await persist({ guard: result, sample });
-        if (result.stop) {
-          break;
-        }
-        while (
-          samples.length > 1 &&
-          sample.monotonic_ms - samples[0].monotonic_ms > 300_000
-        ) {
-          samples.shift();
-        }
-      }
-      previous = raw;
-      await interval(
-        Math.max(0, 1000 - (performance.now() - start)),
-        undefined,
-        {
-          signal: AbortSignal.any([
-            controller.signal,
-            ...(signal ? [signal] : []),
-          ]),
-        }
-      );
+  const externalAbort = () => {
+    cancellation.abort();
+  };
+  const sharedAbort = () => {
+    if (!closed) {
+      cancellation.abort();
     }
-    /* eslint-enable no-await-in-loop */
-  } catch {
+  };
+  signal?.addEventListener("abort", externalAbort, { once: true });
+  controller.signal.addEventListener("abort", sharedAbort, { once: true });
+  if (signal?.aborted || controller.signal.aborted) {
+    cancellation.abort();
+  }
+  const blocked = async (reason) => {
     result = {
-      reasons: ["host sampling unavailable or cancelled"],
+      reasons: [...new Set([...result.reasons, reason])],
       status: "BLOCKED",
       stop: true,
     };
+    await close();
+  };
+  const sampleCycle = async (deadline) => {
+    const start = performance.now();
+    const before = Date.now();
+    const raw = await collect({ signal: deadline });
+    if (deadline.aborted) {
+      throw new Error("collection cancelled");
+    }
+    if (raw.clock_offset_ms === undefined) {
+      raw.clock_offset_ms = Date.parse(raw.utc) - (before + Date.now()) / 2;
+    }
+    if (previous) {
+      const sample = parseHostSample(raw, previous);
+      samples.push(sample);
+      result = evaluateGuard(samples);
+      if (result.stop) {
+        await close();
+      }
+      await persist({ guard: result, sample }, { signal: deadline });
+      if (deadline.aborted) {
+        throw new Error("persistence cancelled");
+      }
+      if (result.stop) {
+        return false;
+      }
+      // Keep the last observation at or before the five-minute boundary;
+      // its following interval is clipped when calculating window means.
+      while (
+        samples.length > 2 &&
+        samples[1].monotonic_ms <= sample.monotonic_ms - 300_000
+      ) {
+        samples.shift();
+      }
+    }
+    previous = raw;
+    await interval(Math.max(0, 1000 - (performance.now() - start)), undefined, {
+      signal: deadline,
+    });
+    return true;
+  };
+  try {
+    /* eslint-disable no-await-in-loop -- Every cycle must finish before the next observation; the independent watchdog bounds its waits. */
+    while (!cancellation.signal.aborted) {
+      const proceed = await samplingWatchdog(sampleCycle, {
+        onExpired: async () => {
+          await blocked("sampling cycle stalled or cancelled");
+        },
+        signal: cancellation.signal,
+      });
+      if (!proceed) {
+        break;
+      }
+    }
+    /* eslint-enable no-await-in-loop */
+  } catch {
+    await blocked("host sampling unavailable or cancelled");
+  } finally {
+    signal?.removeEventListener("abort", externalAbort);
+    controller.signal.removeEventListener("abort", sharedAbort);
   }
   await close();
-  await persist({ guard: result });
+  try {
+    await samplingWatchdog(
+      async (deadline) =>
+        await persist({ guard: result }, { signal: deadline }),
+      {
+        onExpired: async () => {
+          await blocked("terminal evidence persistence unavailable");
+        },
+      }
+    );
+  } catch {
+    await blocked("terminal evidence persistence unavailable");
+  }
   return result;
 };
 
