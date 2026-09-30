@@ -689,6 +689,63 @@ test("default preflight clock rejects equally stale inventory and guest evidence
   );
 });
 
+test("slow persistence cannot renew freshness before a stalled next collection", async () => {
+  const controller = new AbortController();
+  const external = new AbortController();
+  const stalled = Promise.withResolvers();
+  const entered = Promise.withResolvers();
+  let count = 0;
+  let observedAt;
+  let stops = 0;
+  const work = sampleHost({
+    collect: () => {
+      count += 1;
+      if (count > 2) {
+        entered.resolve();
+        return stalled.promise;
+      }
+      observedAt = performance.now();
+      return {
+        clock_offset_ms: 0,
+        containers: [],
+        cpu: [count, 0, 0, count * 9, 0, 0, 0, 0],
+        mem_available_kib: 1_048_576,
+        monotonic_ms: count * 1000,
+        oom_count: 0,
+        page_size: 4096,
+        root_available: 20 * 1024 ** 3,
+        root_size: 100,
+        root_used: 30,
+        swap_in_pages: 0,
+        swap_out_pages: 0,
+        utc,
+      };
+    },
+    controller,
+    interval: () => {},
+    persist: async (value) => {
+      if (value.sample) {
+        await sleep(2500);
+      }
+    },
+    signal: external.signal,
+    stopLoad: () => {
+      stops += 1;
+    },
+  });
+  try {
+    await entered.promise;
+    await sleep(Math.max(0, observedAt + 3300 - performance.now()));
+    assert.ok(performance.now() - observedAt >= 3290);
+    assert.equal(controller.signal.aborted, true);
+    assert.equal(stops, 1);
+  } finally {
+    external.abort();
+    stalled.resolve();
+    await work;
+  }
+}, 5000);
+
 test("same-second volume replacement cannot retain its filesystem creation identity", async () => {
   const dockerRoot = await mkdtemp(path.join(tmpdir(), "capacity-volume-"));
   const mountpoint = path.join(dockerRoot, "volumes/v1/_data");

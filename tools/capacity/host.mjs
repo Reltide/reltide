@@ -739,6 +739,7 @@ const samplingWatchdog = async (operation, { signal, onExpired }) => {
 };
 
 /** The watchdog covers collection, persistence and the one-second cadence wait.
+ * Observation freshness remains bounded across cycles, including slow evidence.
  * An external cancellation also closes the caller's shared admission signal.
  * Pressure-triggered admission closure still allows bounded evidence saving. */
 export const sampleHost = async ({
@@ -751,6 +752,15 @@ export const sampleHost = async ({
 }) => {
   const samples = [];
   const cancellation = new AbortController();
+  const freshness = new AbortController();
+  const expireFreshness = () => {
+    freshness.abort();
+  };
+  let freshnessTimer = setTimeout(expireFreshness, 3000);
+  const samplingSignal = AbortSignal.any([
+    cancellation.signal,
+    freshness.signal,
+  ]);
   let previous;
   let closed = false;
   let result = {
@@ -790,6 +800,7 @@ export const sampleHost = async ({
     const start = performance.now();
     const before = Date.now();
     const raw = await collect({ signal: deadline });
+    const observedAt = performance.now();
     if (deadline.aborted) {
       throw new Error("collection cancelled");
     }
@@ -802,6 +813,14 @@ export const sampleHost = async ({
       result = evaluateGuard(samples);
       if (result.stop) {
         await close();
+      } else {
+        // Only a validated observation renews freshness; persistence, cadence
+        // waits and the start of another collection cannot buy a new deadline.
+        clearTimeout(freshnessTimer);
+        freshnessTimer = setTimeout(
+          expireFreshness,
+          Math.max(0, 3000 - (performance.now() - observedAt))
+        );
       }
       await persist({ guard: result, sample }, { signal: deadline });
       if (deadline.aborted) {
@@ -827,12 +846,12 @@ export const sampleHost = async ({
   };
   try {
     /* eslint-disable no-await-in-loop -- Every cycle must finish before the next observation; the independent watchdog bounds its waits. */
-    while (!cancellation.signal.aborted) {
+    while (!samplingSignal.aborted) {
       const proceed = await samplingWatchdog(sampleCycle, {
         onExpired: async () => {
           await blocked("sampling cycle stalled or cancelled");
         },
-        signal: cancellation.signal,
+        signal: samplingSignal,
       });
       if (!proceed) {
         break;
@@ -842,6 +861,7 @@ export const sampleHost = async ({
   } catch {
     await blocked("host sampling unavailable or cancelled");
   } finally {
+    clearTimeout(freshnessTimer);
     signal?.removeEventListener("abort", externalAbort);
     controller.signal.removeEventListener("abort", sharedAbort);
   }
