@@ -107,7 +107,7 @@ const fixture = () => {
     run_id: id,
     sequence: i + 1,
     status: 200,
-    url: `http://${service}/`,
+    url: `http://${service}/bulk`,
   }));
   events.push(
     {
@@ -155,6 +155,18 @@ const fixture = () => {
       stored: 10,
     }
   );
+  Object.assign(events[5], {
+    temporal_run_id: "unit-temporal-100002",
+    workflow_id: `reltide-capacity-${id}-100002`,
+    workflow_sequence: 100_002,
+  });
+  events.splice(5, 0, {
+    ...events[5],
+    completed_at: null,
+    kind: "workflow_started",
+    outcome: "accepted",
+  });
+  let workflowSequence = 100_002;
   for (const phase of phaseRecords.filter((p) => p.http_rps > 0)) {
     const start = Date.parse(phase.started_at);
     for (let i = 0; i < (phase.duration_ms * phase.http_rps) / 1000; i += 1) {
@@ -175,8 +187,39 @@ const fixture = () => {
         phase: phase.name,
         run_id: id,
         status: 200,
-        url: `http://${service}/bulk`,
+        url: `http://${service}/${Math.floor(i / 4) % 2 ? "bulk" : ""}`,
       });
+    }
+    for (let offset = 0; offset < phase.duration_ms; offset += 10_000) {
+      const ms = start + offset;
+      if (ms === Date.parse(at(3_000_000))) {
+        continue;
+      }
+      events.push({
+        ...structuredClone(events[4]),
+        accepted_at: new Date(ms).toISOString(),
+        completed_at: new Date(ms + 4000).toISOString(),
+        phase: phase.name,
+      });
+      workflowSequence += 1;
+      const workflow = {
+        ...events[6],
+        accepted_at: new Date(ms).toISOString(),
+        completed_at: new Date(ms + 10_000).toISOString(),
+        phase: phase.name,
+        temporal_run_id: `unit-temporal-${workflowSequence}`,
+        workflow_id: `reltide-capacity-${id}-${workflowSequence}`,
+        workflow_sequence: workflowSequence,
+      };
+      events.push(
+        {
+          ...workflow,
+          completed_at: null,
+          kind: "workflow_started",
+          outcome: "accepted",
+        },
+        workflow
+      );
     }
     for (let offset = 0; offset < phase.duration_ms; offset += 1000) {
       const ms = start + offset;
@@ -531,14 +574,25 @@ for (const [name, mutate, want] of [
   [
     "analytics p95 2001",
     (e) => {
-      e.events[4].analytics.elapsed_ms = 2001;
+      for (const v of e.events.filter((event) => event.analytics)) {
+        v.analytics.elapsed_ms = 2001;
+      }
     },
     "FAIL",
   ],
   [
     "HTTP p95 501",
     (e) => {
-      e.events[0].completed_at = at(3_000_501);
+      for (const v of e.events.filter(
+        (event) =>
+          event.kind === "http" &&
+          event.url === "http://app/" &&
+          event.phase === "ramp-1"
+      )) {
+        v.completed_at = new Date(
+          Date.parse(v.accepted_at) + 501
+        ).toISOString();
+      }
     },
     "FAIL",
   ],
@@ -602,7 +656,8 @@ for (const [name, mutate, want] of [
   [
     "missing scheduling latency",
     (e) => {
-      delete e.events[5].scheduling_delay_ms;
+      delete e.events.find((v) => v.kind === "workflow_completed")
+        .scheduling_delay_ms;
     },
     "BLOCKED",
   ],
@@ -629,8 +684,11 @@ test("reports whitelist data and keep endpoint-specific sample counts", () => {
   const json = JSON.stringify(report);
   assert.ok(!json.includes("SECRET"));
   assert.ok(!json.includes("postgres://"));
-  assert.equal(report.metrics.http.app.count, 1);
-  assert.equal(report.metrics.http.app.p95_ms, 500);
+  assert.equal(
+    report.metrics.http.app.count,
+    e.events.filter((v) => v.kind === "http" && v.url === "http://app/").length
+  );
+  assert.equal(report.metrics.http.app.p95_ms, 100);
 });
 test("CLI writes reports and returns 0/1/2, malformed or absent evidence stays blocked", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "capacity-report-"));
@@ -745,7 +803,7 @@ test("seed and load declarations cannot hide absent native coverage", () => {
   const e = fixture();
   e.events = e.events.slice(0, 7);
   for (const service of services.slice(0, 4)) {
-    e.manifest.requests[service] = [`http://${service}/`];
+    e.manifest.requests[service] = [`http://${service}/bulk`];
   }
   assert.equal(evaluateRun(e).capacity, "BLOCKED");
 });
@@ -779,10 +837,20 @@ test("retention DDL changes and overlapping restarts fail", () => {
 });
 test("endpoint distributions do not pool a slow endpoint into fast bulk requests", () => {
   const e = fixture();
-  e.events[0].completed_at = at(3_000_501);
+  for (const v of e.events.filter(
+    (event) =>
+      event.kind === "http" &&
+      event.url === "http://app/" &&
+      event.phase === "ramp-1"
+  )) {
+    v.completed_at = new Date(Date.parse(v.accepted_at) + 501).toISOString();
+  }
   const report = createReport(e);
   assert.equal(report.verdicts.capacity, "FAIL");
-  assert.equal(report.metrics.http.app.count, 1);
+  assert.equal(
+    report.metrics.http.app.count,
+    e.events.filter((v) => v.kind === "http" && v.url === "http://app/").length
+  );
   assert.equal(report.metrics.http.app_1.p95_ms, 100);
 });
 
@@ -883,7 +951,10 @@ test("a submitted operation with no terminal evidence stays incomplete", () => {
 });
 test("nested workflow run contradictions cannot be hidden by an outer envelope", () => {
   const e = fixture();
-  e.events[5].probe_event = { event: "completed", run_id: "other" };
+  e.events.find((v) => v.kind === "workflow_completed").probe_event = {
+    event: "completed",
+    run_id: "other",
+  };
   assert.equal(evaluateRun(e).combined, "FAIL");
 });
 test("a present nonobject producer artifact prevents a native PASS", async () => {
@@ -945,7 +1016,9 @@ test("round 1 malformed analytics sample cannot hide latency failure", () => {
   const e = fixture();
   const output = e.events.find((v) => v.analytics).analytics;
   output.sample[0] = null;
-  output.elapsed_ms = 2001;
+  for (const v of e.events.filter((event) => event.analytics)) {
+    v.analytics.elapsed_ms = 2001;
+  }
   assert.equal(evaluateRun(e).analytics, "FAIL");
 });
 test("round 1 missing nested observations block while later guards survive", () => {
@@ -1115,17 +1188,19 @@ test("round 1 telemetry minute totals cannot hide oversized admissions", () => {
 test("round 1 HyperDX uses the outer telemetry run separately from analytics", () => {
   const e = fixture();
   e.manifest.fixture_run_id = `${id}-analytics`;
-  const output = e.events.find((v) => v.analytics).analytics;
-  output.run_id = e.manifest.fixture_run_id;
-  for (const row of output.sample) {
-    row.run_id = output.run_id;
+  for (const event of e.events.filter((v) => v.analytics)) {
+    const output = event.analytics;
+    output.run_id = e.manifest.fixture_run_id;
+    for (const row of output.sample) {
+      row.run_id = output.run_id;
+    }
+    output.explain[0].Plan["Remote SQL"] = output.explain[0].Plan[
+      "Remote SQL"
+    ].replace(`'${id}'`, `'${output.run_id}'`);
   }
-  output.explain[0].Plan["Remote SQL"] = output.explain[0].Plan[
-    "Remote SQL"
-  ].replace(`'${id}'`, `'${output.run_id}'`);
   assert.equal(evaluateRun(e).analytics, "PASS");
   e.events.find((v) => v.search).search.first_id = createHash("sha256")
-    .update(`${output.run_id}:current:1`)
+    .update(`${e.manifest.fixture_run_id}:current:1`)
     .digest("hex");
   assert.equal(evaluateRun(e).analytics, "FAIL");
 });
@@ -1140,10 +1215,9 @@ test("round 2 unavailable HyperDX identifiers stay incomplete", () => {
 test("round 2 unavailable HyperDX identifiers preserve measured failures", () => {
   for (const update of [{ rows: 0 }, { elapsed_ms: 2001 }]) {
     const e = fixture();
-    Object.assign(e.events.find((v) => v.search).search, {
-      first_id: null,
-      ...update,
-    });
+    for (const v of e.events.filter((event) => event.search)) {
+      Object.assign(v.search, { first_id: null, ...update });
+    }
     assert.equal(evaluateRun(e).analytics, "FAIL");
   }
 });
@@ -1205,4 +1279,195 @@ test("round 2 missing expiry count cannot hide a measured time reversal", () => 
     v.sequence = i + 1;
   }
   assert.equal(evaluateRun(e).retention, "FAIL");
+});
+
+test("final review slow ramp HTTP cannot be diluted by a fast soak", () => {
+  const e = fixture();
+  for (const v of e.events.filter(
+    (event) => event.kind === "http" && event.phase === "ramp-1"
+  )) {
+    v.completed_at = new Date(Date.parse(v.accepted_at) + 501).toISOString();
+  }
+  assert.equal(evaluateRun(e).capacity, "FAIL");
+});
+test("final review measured HTTP mix cannot concentrate on one service", () => {
+  const e = fixture();
+  for (const v of e.events.filter(
+    (event) => event.kind === "http" && event.phase === "ramp-1"
+  )) {
+    v.url = "http://app/bulk";
+  }
+  assert.equal(evaluateRun(e).capacity, "FAIL");
+});
+test("final review sparse foreground and workflow evidence is incomplete", () => {
+  const e = fixture();
+  let foreground = false;
+  let workflow = false;
+  e.events = e.events.filter((v) => {
+    if (v.kind === "foreground") {
+      if (foreground) {
+        return false;
+      }
+      foreground = true;
+    }
+    if (v.kind === "workflow_completed") {
+      if (workflow) {
+        return false;
+      }
+      workflow = true;
+    }
+    return true;
+  });
+  for (const [i, v] of e.events.entries()) {
+    v.sequence = i + 1;
+  }
+  assert.equal(evaluateRun(e).capacity, "BLOCKED");
+});
+test("final review clipped CPU windows agree with the live guard under jitter", async () => {
+  const { evaluateGuard } = await import("./host.mjs");
+  const e = fixture();
+  e.host_samples = e.host_samples.slice(0, 301).map((v, i) => ({
+    ...v,
+    cpu_busy_ratio: i < 2 ? 0 : 0.802,
+    monotonic_ms: i * 1001,
+    utc: at(i * 1001),
+  }));
+  const guard = evaluateGuard(e.host_samples);
+  assert.equal(guard.status, "FAIL");
+  const report = createReport(e);
+  assert.equal(
+    report.metrics.resource_windows.five_minute.cpu_busy_ratio,
+    guard.windows.five_minute.cpu_busy_ratio
+  );
+  assert.equal(
+    report.metrics.resource_windows.five_minute.duration_ms,
+    300_000
+  );
+  assert.equal(report.verdicts.capacity, "FAIL");
+});
+test("final review unavailable clock offsets stay incomplete", () => {
+  const e = fixture();
+  for (const v of e.host_samples) {
+    v.clock_offset_ms = null;
+  }
+  assert.equal(evaluateRun(e).capacity, "BLOCKED");
+  e.host_samples[100].oom_count = 1;
+  assert.equal(evaluateRun(e).capacity, "FAIL");
+});
+
+test("final review endpoint mix is measured inside each phase", () => {
+  const e = fixture();
+  for (const v of e.events.filter(
+    (event) =>
+      event.kind === "http" &&
+      event.phase === "ramp-3" &&
+      event.url === "http://app/"
+  )) {
+    v.url = "http://app/bulk";
+  }
+  assert.equal(evaluateRun(e).capacity, "FAIL");
+});
+test("final review foreground needs completed pairs in each phase slot", () => {
+  for (const change of [
+    (v) => {
+      delete v.search;
+    },
+    (v) => {
+      v.accepted_at = at(0);
+    },
+    (v) => {
+      v.completed_at = at(20_000_000);
+    },
+  ]) {
+    const e = fixture();
+    const v = e.events.find(
+      (event) => event.kind === "foreground" && event.phase === "ramp-1"
+    );
+    change(v);
+    assert.equal(evaluateRun(e).analytics, v.search ? "FAIL" : "BLOCKED");
+  }
+});
+test("final review missing recurring workflow admission blocks and conflicting identity fails", () => {
+  const e = fixture();
+  const start = e.events.find((v) => v.kind === "workflow_started");
+  const complete = e.events.find(
+    (v) =>
+      v.kind === "workflow_completed" && v.workflow_id === start.workflow_id
+  );
+  complete.temporal_run_id = "other-temporal-run";
+  assert.equal(evaluateRun(e).capacity, "FAIL");
+  complete.temporal_run_id = start.temporal_run_id;
+  e.events = e.events.filter((v) => v !== start);
+  for (const [i, v] of e.events.entries()) {
+    v.sequence = i + 1;
+  }
+  assert.equal(evaluateRun(e).capacity, "BLOCKED");
+});
+test("final review clock type validation accepts signed numbers only", () => {
+  const e = fixture();
+  for (const v of e.host_samples) {
+    v.clock_offset_ms = -1000;
+  }
+  assert.equal(evaluateRun(e).capacity, "PASS");
+  e.host_samples[100].clock_offset_ms = "0";
+  assert.equal(evaluateRun(e).capacity, "BLOCKED");
+});
+test("final review guard window agreement includes clear CPU and clipped swap activity", async () => {
+  const { evaluateGuard } = await import("./host.mjs");
+  const e = fixture();
+  e.host_samples = e.host_samples.slice(0, 301).map((v, i) => ({
+    ...v,
+    cpu_busy_ratio: 0.799,
+    monotonic_ms: i * 1001,
+    utc: at(i * 1001),
+  }));
+  const guard = evaluateGuard(e.host_samples);
+  assert.equal(guard.status, "CLEAR");
+  const report = createReport(e);
+  assert.ok(
+    Math.abs(
+      report.metrics.resource_windows.five_minute.cpu_busy_ratio -
+        guard.windows.five_minute.cpu_busy_ratio
+    ) < 1e-12
+  );
+  assert.equal(
+    report.metrics.resource_windows.five_minute.duration_ms,
+    guard.windows.five_minute.duration_ms
+  );
+  e.host_samples = e.host_samples.slice(0, 61);
+  for (const [i, v] of e.host_samples.entries()) {
+    v.swap_in_bytes = i > 0 ? 1 : 0;
+  }
+  const swapped = evaluateGuard(e.host_samples);
+  assert.equal(
+    createReport(e).metrics.resource_windows.one_minute.swap_active,
+    swapped.windows.one_minute.swap_active
+  );
+});
+test("final review phase HTTP latency excludes only verified induced windows", () => {
+  const e = fixture();
+  const phase = e.manifest.phases.find((p) => p.name === "ramp-1");
+  for (const v of e.events.filter(
+    (event) =>
+      event.kind === "http" &&
+      event.phase === phase.name &&
+      event.url === "http://app/"
+  )) {
+    v.completed_at = new Date(Date.parse(v.accepted_at) + 501).toISOString();
+  }
+  const window = {
+    completed_at: phase.completed_at,
+    declared_at: at(0),
+    kind: "restart",
+    ownership_sha256: sha,
+    ownership_verified: true,
+    recovery_check: check(),
+    run_id: id,
+    service: "app",
+    started_at: phase.started_at,
+  };
+  e.manifest.induced_windows.push(window);
+  assert.equal(evaluateRun(e).capacity, "BLOCKED");
+  window.ownership_verified = false;
+  assert.equal(evaluateRun(e).capacity, "FAIL");
 });

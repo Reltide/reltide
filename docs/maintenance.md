@@ -224,7 +224,16 @@ SHA-256 of `${outer_run_id}:current:1`; this telemetry fixture is separate from
 `manifest.fixture_run_id`, which identifies the analytics fixture. Current local producers
 do not supply these separate timings: combined foreground time does not establish
 HyperDX p95, and workflow completion time does not establish scheduling delay.
-HTTP distributions remain separate per frozen endpoint, with counts. Thresholds
+HTTP distributions remain separate per frozen endpoint and required phase, with
+counts; a fast soak cannot dilute a slow ramp. Each phase requires the measured
+equal service mix and round-robin endpoint mix. Foreground search/analytics pairs
+must recur in every ten-second admission slot and finish inside the measured
+phase; separate query admission times are not inferred from the combined record.
+Workflow starts and completions match on workflow ID, Temporal run ID, sequence,
+phase and admission UTC, with one matched completion in every ten-second slot.
+Missing recurring observations remain incomplete, even with passing check hashes.
+CPU windows clip the leading sample interval at the exact one/five-minute boundary,
+matching the live guard; clock offsets must be finite signed numeric measurements. Thresholds
 are HTTP p95 ≤500 ms, workflow delay/completion p95 ≤5/10 seconds, steady telemetry
 searchable within 30 seconds, and separate foreign/HyperDX p95 ≤2 seconds.
 

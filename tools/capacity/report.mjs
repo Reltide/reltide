@@ -209,7 +209,7 @@ const hostSample = (s, e, x, prev, cs) => {
     "partial host metrics"
   );
   s.need(
-    finite(Math.abs(x.clock_offset_ms)) && Math.abs(x.clock_offset_ms) <= 1000,
+    Number.isFinite(x.clock_offset_ms) && Math.abs(x.clock_offset_ms) <= 1000,
     "clock synchronization missing"
   );
   s.fail(
@@ -279,9 +279,19 @@ const resourceWindow = (s, x, prev, delta, queues, totals, peaks) => {
       totals[key] -= q.shift().delta;
     }
     if (totals[key] >= limit) {
-      const cpu = q.reduce((sum, v) => sum + v.cpu * v.delta, 0) / totals[key];
+      // Match host.mjs sampleWindow: clip the leading interval at the exact boundary.
+      const boundary = x.monotonic_ms - limit;
+      const weighted = q.reduce(
+        (sum, v) => sum + v.cpu * Math.min(v.delta, v.end - boundary),
+        0
+      );
+      const elapsed = q.reduce(
+        (sum, v) => sum + Math.min(v.delta, v.end - boundary),
+        0
+      );
+      const cpu = weighted / elapsed;
       const swap = q.some((v) => v.swap);
-      peaks[key].duration_ms = Math.max(peaks[key].duration_ms, totals[key]);
+      peaks[key].duration_ms = Math.max(peaks[key].duration_ms, elapsed);
       peaks[key].cpu_busy_ratio = Math.max(peaks[key].cpu_busy_ratio, cpu);
       peaks[key].swap_active ||= swap;
       s.fail(key === "five_minute" && cpu > 0.8, "five-minute CPU above 80%");
@@ -404,13 +414,28 @@ const phaseEvidence = (s, e) => {
 };
 const httpMetrics = (s, e, metrics) => {
   metrics.http = {};
+  metrics.http_phases = {};
+  const phases = list(e.manifest?.phases).filter((p) =>
+    ["ramp-1", "ramp-3", "ramp-5", "soak", "final"].includes(p?.name)
+  );
   const requests = e.load_manifest?.requests ?? e.manifest?.requests;
   for (const group of ["app", "web", "docs", "api"]) {
     const urls = list(requests?.[group]);
     s.need(urls.length > 0, "HTTP endpoint manifest missing");
+    const exclusions = windows(e)
+      .filter((w) => validWindow(w, e) && w.service === group)
+      .map((w) => [Date.parse(w.started_at), Date.parse(w.completed_at)]);
     for (const [index, url] of urls.entries()) {
       const events = list(e.events).filter(
-        (v) => v.kind === "http" && v.url === url && v.outcome === "completed"
+        (v) =>
+          v.kind === "http" &&
+          v.url === url &&
+          v.outcome === "completed" &&
+          !exclusions.some(
+            ([start, end]) =>
+              Date.parse(v.completed_at) >= start &&
+              Date.parse(v.completed_at) <= end
+          )
       );
       const values = events.map((v) => duration(v.accepted_at, v.completed_at));
       const m = summary(values);
@@ -418,6 +443,18 @@ const httpMetrics = (s, e, metrics) => {
       metrics.http[key] = m;
       s.need(m.count > 0 && m.count === events.length, "HTTP timings missing");
       s.fail(m.p95_ms > 500, "HTTP p95 above 500 ms");
+      for (const phase of phases) {
+        const phaseValues = events
+          .filter((v) => v.phase === phase.name)
+          .map((v) => duration(v.accepted_at, v.completed_at));
+        const measured = summary(phaseValues);
+        (metrics.http_phases[phase.name] ??= {})[key] = measured;
+        s.need(
+          measured.count > 0 && measured.count === phaseValues.length,
+          "phase endpoint HTTP timings missing"
+        );
+        s.fail(measured.p95_ms > 500, "phase endpoint HTTP p95 above 500 ms");
+      }
     }
   }
   for (const v of list(e.events)) {
@@ -630,6 +667,174 @@ const phaseStorage = (s, p, events) => {
     }
   }
 };
+const httpMix = (s, e, p, rows) => {
+  const requests = e.load_manifest?.requests ?? e.manifest?.requests;
+  const expected = (p.duration_ms * p.http_rps) / 1000;
+  for (const group of ["app", "web", "docs", "api"]) {
+    const urls = list(requests?.[group]);
+    const counts = urls.map((url) => rows.filter((v) => v.url === url).length);
+    const total = counts.reduce((sum, n) => sum + n, 0);
+    s.need(
+      total >= Math.floor(expected / 4),
+      "phase HTTP service mix incomplete"
+    );
+    s.fail(
+      total > Math.ceil(expected / 4),
+      "phase HTTP service mix contradicts prescribed workload"
+    );
+    for (const count of counts) {
+      s.need(
+        count >= Math.floor(expected / 4 / urls.length),
+        "phase HTTP endpoint mix incomplete"
+      );
+      s.fail(
+        count > Math.ceil(expected / 4 / urls.length),
+        "phase HTTP endpoint mix contradicts prescribed workload"
+      );
+    }
+  }
+};
+const recurringPhase = (s, p, rows) => {
+  const start = Date.parse(p.started_at);
+  const end = Date.parse(p.completed_at);
+  const slots = new Set();
+  const ordered = rows.toSorted(
+    (a, b) => Date.parse(a.accepted_at) - Date.parse(b.accepted_at)
+  );
+  let previous;
+  for (const v of ordered) {
+    const at = Date.parse(v.accepted_at);
+    const done = Date.parse(v.completed_at);
+    const measured = utc(v.accepted_at) && utc(v.completed_at);
+    s.need(measured, "recurring probe timing missing");
+    const inside =
+      measured && at >= start && at < end && done >= at && done <= end;
+    s.fail(
+      measured && finite(end - start) && !inside,
+      "recurring probe contradicts declared phase interval"
+    );
+    if (!inside) {
+      continue;
+    }
+    if (previous) {
+      s.fail(
+        at - Date.parse(previous.accepted_at) < 10_000 ||
+          at < Date.parse(previous.completed_at),
+        "recurring probe admission overlaps or exceeds cadence"
+      );
+    }
+    slots.add(Math.floor((at - start) / 10_000));
+    previous = v;
+  }
+  s.need(
+    slots.size >= Math.ceil((end - start) / 10_000),
+    "recurring phase probe coverage incomplete"
+  );
+  return slots.size;
+};
+const foregroundCoverage = (s, e, metrics) => {
+  metrics.foreground_phases = [];
+  for (const p of list(e.manifest?.phases).filter(
+    (phase) => phase?.http_rps > 0
+  )) {
+    const rows = list(e.events).filter(
+      (v) =>
+        v.phase === p.name &&
+        v.kind === "foreground" &&
+        v.outcome === "completed" &&
+        record(v.search) &&
+        record(v.analytics)
+    );
+    const count = recurringPhase(s, p, rows);
+    const search = summary(rows.map((v) => v.search.elapsed_ms));
+    const foreign = summary(rows.map((v) => v.analytics.elapsed_ms));
+    s.fail(
+      search.p95_ms > 2000 || foreign.p95_ms > 2000,
+      "phase analytics p95 above 2 seconds"
+    );
+    metrics.foreground_phases.push({
+      count,
+      foreign,
+      phase: ["ramp-1", "ramp-3", "ramp-5", "soak", "final"].includes(p.name)
+        ? p.name
+        : null,
+      search,
+    });
+  }
+};
+const workflowIdentity = (v) =>
+  string(v.workflow_id) &&
+  v.workflow_id.length > 0 &&
+  string(v.temporal_run_id) &&
+  v.temporal_run_id.length > 0 &&
+  integer(v.workflow_sequence);
+const workflowCoverage = (s, e, metrics) => {
+  const groups = new Map();
+  for (const v of list(e.events).filter((event) =>
+    ["workflow_started", "workflow_completed"].includes(event.kind)
+  )) {
+    const known = workflowIdentity(v);
+    s.need(known, "workflow admission identity missing");
+    if (!known) {
+      continue;
+    }
+    const group = groups.get(v.workflow_id) ?? [];
+    group.push(v);
+    groups.set(v.workflow_id, group);
+  }
+  const matched = [];
+  for (const rows of groups.values()) {
+    const starts = rows.filter((v) => v.kind === "workflow_started");
+    const ends = rows.filter((v) => v.kind === "workflow_completed");
+    s.need(
+      starts.length > 0 && ends.length > 0,
+      "matched workflow admission/completion missing"
+    );
+    s.fail(
+      starts.length > 1 || ends.length > 1,
+      "duplicate workflow admission or completion"
+    );
+    if (starts.length !== 1 || ends.length !== 1) {
+      continue;
+    }
+    const [a] = starts;
+    const [b] = ends;
+    s.fail(
+      a.temporal_run_id !== b.temporal_run_id ||
+        a.workflow_sequence !== b.workflow_sequence ||
+        a.phase !== b.phase ||
+        a.sequence >= b.sequence,
+      "workflow completion contradicts admission identity"
+    );
+    s.need(
+      utc(a.accepted_at) && utc(b.accepted_at),
+      "workflow admission UTC missing"
+    );
+    s.fail(
+      utc(a.accepted_at) &&
+        utc(b.accepted_at) &&
+        a.accepted_at !== b.accepted_at,
+      "workflow completion contradicts admission UTC"
+    );
+    matched.push(b);
+  }
+  metrics.workflow_phases = [];
+  for (const p of list(e.manifest?.phases).filter(
+    (phase) => phase?.http_rps > 0
+  )) {
+    const count = recurringPhase(
+      s,
+      p,
+      matched.filter((v) => v.phase === p.name)
+    );
+    metrics.workflow_phases.push({
+      count,
+      phase: ["ramp-1", "ramp-3", "ramp-5", "soak", "final"].includes(p.name)
+        ? p.name
+        : null,
+    });
+  }
+};
 const measuredCoverage = (s, e, metrics) => {
   metrics.phase_counts = [];
   for (const p of records(
@@ -638,6 +843,12 @@ const measuredCoverage = (s, e, metrics) => {
     "malformed phase observations"
   )) {
     const events = list(e.events).filter((v) => v.phase === p.name);
+    httpMix(
+      s,
+      e,
+      p,
+      events.filter((v) => v.kind === "http" && v.outcome === "completed")
+    );
     const http = phaseCoverage(
       s,
       p,
@@ -1540,7 +1751,7 @@ const evaluate = (input = {}) => {
     "integration failed"
   );
   const checks = {
-    analytics: [analyticsEvidence],
+    analytics: [analyticsEvidence, foregroundCoverage],
     backup: [backupEvidence],
     capacity: [
       phaseEvidence,
@@ -1551,6 +1762,7 @@ const evaluate = (input = {}) => {
       measuredCoverage,
       producerCounters,
       operationContinuity,
+      workflowCoverage,
     ],
     recovery: [recoveryEvidence],
     restart: [restartEvidence],
