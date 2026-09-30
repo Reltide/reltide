@@ -143,6 +143,11 @@ console.log(JSON.stringify(source.getPages().map(page => ({
   const health = pages.find((page) => page.url.endsWith("/getHealth"));
   assert.match(health.title, /health/iu);
   assert.ok(health.structuredData);
+});
+
+test("validates all guide and generated reference links from a clean copy", () => {
+  const { docs } = fixture(true);
+  assertSuccess(run(docs, "prepare-content.mjs"));
   assertSuccess(run(docs, "check-links.mjs"));
 });
 
