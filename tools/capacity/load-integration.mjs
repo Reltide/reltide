@@ -19,6 +19,8 @@ import {
   runLoad,
   seedAnalyticsFixture,
   seedTelemetry,
+  telemetryEvent,
+  verifyTelemetryBatch,
   waitNormalExpiry,
   verifyUnchangedRetention,
   workload,
@@ -149,6 +151,20 @@ const remoteGuardCheck = async (context, env, foreground, persist, clients) => {
       },
       controller.signal
     );
+    // Preserve the preceding phase's cadence before starting the short remote fixture.
+    const admissionDeadline = Date.now() + 10_000;
+    while (
+      (!accepted.telemetry || !accepted.workflow) &&
+      Date.now() < admissionDeadline
+    ) {
+      await delay(20);
+    }
+    if (!accepted.telemetry || !accepted.workflow) {
+      controller.abort();
+      throw new Error(
+        "guard phase did not retain admitted telemetry and workflow"
+      );
+    }
     const state = { failure: undefined };
     const execution = (async () => {
       try {
@@ -533,6 +549,7 @@ export const localLoadCheck = async (context) => {
       return { status: response.status, url };
     },
     requests,
+    schedule: {},
     search: saved.execute,
     telemetry: (_request, stop) => steady.submit(stop),
     verifyTelemetry: steady.verify,
@@ -679,10 +696,132 @@ export const localLoadCheck = async (context) => {
   };
 };
 
+/* eslint-disable no-await-in-loop -- The fixture and its six readback queries are bounded serial checks. */
+/** Focused producer/access-path correctness; prior Rust/guard/TTL evidence stays separate. */
+export const localPruningCheck = async (context) => {
+  const { telemetry, runId, directory } = context;
+  const { signal } = new AbortController();
+  let verifiedStored = 0;
+  const persist = async (event) => {
+    if (event.kind === "telemetry_stored") {
+      verifiedStored += event.stored;
+    }
+    await appendFile(
+      path.join(directory, "pruning-events.ndjson"),
+      `${context.redact(JSON.stringify(event))}\n`
+    );
+  };
+  const schemas = await discoverTelemetry(telemetry.query, signal);
+  await persist({ kind: "source_schema", schemas });
+  const seed = {
+    cohort: "current",
+    epoch_ms: Date.now() - 3000,
+    rate: 200,
+    run_id: runId,
+  };
+  const sender = createTelemetrySender({
+    ...telemetry,
+    persist,
+    schemas,
+    seed,
+  });
+  const producer = await seedTelemetry(seed, 520, sender, signal);
+  assert.equal(producer.accepted, 520);
+  assert.equal(verifiedStored, 520);
+  // The direct clone tests sparse-index access; it is not full OTLP ingestion.
+  const cloneSeed = { ...seed, epoch_ms: Date.now() - 13_000_000 };
+  const fixture = await context.prepareTracePruning(cloneSeed.epoch_ms);
+  await persist({
+    clone: fixture.clone,
+    kind: "trace_clone",
+    parts: fixture.parts(),
+    source: fixture.source,
+  });
+  let querySequence = 0;
+  const proofs = [];
+  const query = async (sql, stop) => {
+    querySequence += 1;
+    const label = `${runId}-pruning-${querySequence}`;
+    const tagged = sql.replace(
+      " FORMAT JSON",
+      `,log_comment='${label}' FORMAT JSON`
+    );
+    const explain = await telemetry.query(`EXPLAIN indexes=1 ${sql}`, stop);
+    const plan = explain.data.map((row) => row.explain).join("\n");
+    const primary =
+      /PrimaryKey[\s\S]*?Granules: (?<selected>\d+)\/(?<total>\d+)/u.exec(plan);
+    assert.ok(
+      primary && Number(primary.groups.selected) < Number(primary.groups.total),
+      "primary key must prune trace granules"
+    );
+    const result = await telemetry.query(tagged, stop);
+    assert.ok(
+      Number(result.statistics.rows_read) > 0 &&
+        Number(result.statistics.rows_read) <= 50_000
+    );
+    await persist({
+      explain,
+      kind: "pruning_query",
+      label,
+      sql: tagged,
+      statistics: result.statistics,
+    });
+    return result;
+  };
+  for (const offset of [0, 1_296_000, 2_591_800]) {
+    const batch = {
+      events: Array.from({ length: 100 }, (_, index) =>
+        telemetryEvent(cloneSeed, offset + (index + 1) * 2)
+      ),
+    };
+
+    proofs.push(
+      await verifyTelemetryBatch(
+        cloneSeed,
+        batch,
+        { ...schemas, traces: { ...schemas.traces, table: fixture.table } },
+        query,
+        signal
+      )
+    );
+  }
+  let witnesses;
+  const deadline = Date.now() + 30_000;
+  do {
+    witnesses = fixture.witnesses();
+    if (witnesses.data.length === querySequence) {
+      break;
+    }
+    await delay(500);
+  } while (Date.now() < deadline);
+  assert.equal(witnesses.data.length, 6);
+  assert.ok(
+    witnesses.data.every(
+      (row) =>
+        Number(row.read_rows) > 0 &&
+        Number(row.read_rows) <= 50_000 &&
+        Number(row.exception_code) === 0
+    )
+  );
+  const parts = fixture.parts();
+  await persist({ kind: "pruning_witnesses", parts, witnesses });
+  return {
+    capacity_pass: false,
+    kind: "focused-producer-pruning-correctness",
+    parts,
+    producer: { ...producer, verified_stored: verifiedStored },
+    proofs,
+    witnesses,
+  };
+};
+
+/* eslint-enable no-await-in-loop */
+
 if (process.argv[1] === import.meta.filename) {
-  const [runId] = process.argv.slice(2);
+  const [runId, mode] = process.argv.slice(2);
+  assert.ok(mode === undefined || mode === "pruning");
   await integrate(runId, {
     diagnoseBootstrap: process.env.CAPACITY_DIAGNOSE_BOOTSTRAP === "1",
-    localCheck: localLoadCheck,
+    localCheck: mode === "pruning" ? localPruningCheck : localLoadCheck,
   });
 }

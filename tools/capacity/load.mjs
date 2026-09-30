@@ -45,6 +45,9 @@ export const accountTelemetry = ({
   };
 };
 
+const spanName = (seed) =>
+  `capacity/${seed.run_id}/${seed.cohort ?? "current"}`;
+
 export const telemetryEvent = (seed, sequence) => {
   assert.match(seed.run_id, runPattern);
   const id = hash(`${seed.run_id}:${seed.cohort ?? "current"}:${sequence}`);
@@ -63,6 +66,7 @@ export const telemetryEvent = (seed, sequence) => {
     kind: sequence % 2 === 1 ? "logs" : "traces",
     payload,
     sequence,
+    span_name: spanName(seed),
   };
 };
 
@@ -112,12 +116,18 @@ export const encodeOtlp = (events, kind) => {
           {
             scope: { name: "capacity" },
             spans: events.map((event) => ({
-              attributes: otlpAttributes(event),
+              attributes: [
+                ...otlpAttributes(event),
+                {
+                  key: "capacity.payload",
+                  value: { stringValue: event.payload },
+                },
+              ],
               endTimeUnixNano: String(
                 BigInt(event.event_time_ms) * 1_000_000n + 1_000_000n
               ),
               kind: 1,
-              name: event.payload,
+              name: event.span_name,
               spanId: event.id.slice(32, 48),
               startTimeUnixNano: String(
                 BigInt(event.event_time_ms) * 1_000_000n
@@ -132,6 +142,23 @@ export const encodeOtlp = (events, kind) => {
   };
 };
 
+/* eslint-disable no-await-in-loop -- The rolling window retains at most 200 admissions and sleeps until capacity is free. */
+const waitForSeedWindow = async (recent, size, rate, now, wait, stop) => {
+  while (recent.length) {
+    if (recent[0].at + 1000 <= now()) {
+      recent.shift();
+    } else if (
+      recent.reduce((sum, entry) => sum + entry.size, 0) + size >
+      rate
+    ) {
+      await wait(recent[0].at + 1000 - now(), stop);
+    } else {
+      break;
+    }
+  }
+};
+/* eslint-enable no-await-in-loop */
+
 /** Submission acknowledgement is deliberately never counted as stored data. */
 /* eslint-disable no-await-in-loop -- Keep batches bounded and verify each response before admitting the next operation. */
 export const seedTelemetry = async (seed, count, send, stop) => {
@@ -144,6 +171,8 @@ export const seedTelemetry = async (seed, count, send, stop) => {
   const wait = seed.sleep ?? sleep;
   const start = now();
   let previousSubmission = start;
+  let previousSize = Math.min(batch, count);
+  const recent = [];
   const counts = {
     accepted: 0,
     elapsed_ms: 0,
@@ -157,9 +186,10 @@ export const seedTelemetry = async (seed, count, send, stop) => {
     const size = Math.min(batch, count - offset);
     try {
       await wait(
-        Math.max(0, previousSubmission + (size * 1000) / rate - now()),
+        Math.max(0, previousSubmission + (previousSize * 1000) / rate - now()),
         stop
       );
+      await waitForSeedWindow(recent, size, rate, now, wait, stop);
     } catch (error) {
       if (!stopped(stop)) {
         throw error;
@@ -172,6 +202,8 @@ export const seedTelemetry = async (seed, count, send, stop) => {
       telemetryEvent(seed, offset + i + 1)
     );
     previousSubmission = now();
+    previousSize = size;
+    recent.push({ at: previousSubmission, size });
     const acceptedAt = new Date().toISOString();
     const response = await send(
       {
@@ -289,11 +321,17 @@ export const createForegroundPermit = () => {
   };
 };
 
-const phaseOperations = (clients, result, stop, emit, permit) => ({
+const phaseOperations = (clients, result, stop, emit, permit, admitted) => ({
   foreground: async () => {
-    const search = await permit((signal) => clients.search(signal), stop);
+    const search = await permit((signal) => {
+      admitted("foreground");
+      return clients.search(signal);
+    }, stop);
     result.search += 1;
-    const analytics = await permit((signal) => clients.analytics(signal), stop);
+    const analytics = await permit((signal) => {
+      admitted("foreground");
+      return clients.analytics(signal);
+    }, stop);
     result.analytics += 1;
     return { analytics, search };
   },
@@ -319,6 +357,8 @@ const phaseOperations = (clients, result, stop, emit, permit) => ({
     return clients.workflow({ emit }, stop);
   },
 });
+// Reuse clients across phases, or share clients.schedule when wrapping adapters.
+const loadSchedules = new WeakMap();
 /** Bounded per-lane in-flight work; delayed requests are never caught up in a burst. */
 export const runLoad = async (phase, clients, stop) => {
   assert.ok(Number.isFinite(phase.duration_ms) && phase.duration_ms > 0);
@@ -326,7 +366,30 @@ export const runLoad = async (phase, clients, stop) => {
   const now = clients.now ?? performance.now.bind(performance);
   const wait = clients.sleep ?? sleep;
   const start = now();
-  const permit = clients.foreground ?? createForegroundPermit();
+  const scheduleKey = clients.schedule ?? clients;
+  if (!loadSchedules.has(scheduleKey)) {
+    loadSchedules.set(scheduleKey, {
+      next: {
+        foreground: 0,
+        http: 0,
+        telemetry: 0,
+        verification: 0,
+        workflow: 0,
+      },
+      permit: clients.foreground ?? createForegroundPermit(),
+    });
+  }
+  const { next, permit } = loadSchedules.get(scheduleKey);
+  const intervals = {
+    foreground: 10_000,
+    http: phase.http_rps ? 1000 / phase.http_rps : Infinity,
+    telemetry: 1000,
+    verification: 1000,
+    workflow: 10_000,
+  };
+  const admitted = (kind) => {
+    next[kind] = now() + intervals[kind];
+  };
   const result = {
     analytics: 0,
     http: 0,
@@ -339,13 +402,6 @@ export const runLoad = async (phase, clients, stop) => {
   };
   const state = { failure: undefined, sequence: 0 };
   const active = new Map();
-  const next = {
-    foreground: start,
-    http: start,
-    telemetry: start,
-    verification: start,
-    workflow: start,
-  };
   const emit = (event) => {
     state.sequence += 1;
     return clients.emit({
@@ -356,13 +412,22 @@ export const runLoad = async (phase, clients, stop) => {
       ...event,
     });
   };
-  const operations = phaseOperations(clients, result, stop, emit, permit);
+  const operations = phaseOperations(
+    clients,
+    result,
+    stop,
+    emit,
+    permit,
+    admitted
+  );
   const launch = (kind) => {
-    const acceptedAt = new Date().toISOString();
+    let acceptedAt = new Date().toISOString();
     const task = (async () => {
       try {
         await emit({ accepted_at: acceptedAt, kind, outcome: "submitted" });
         stop.throwIfAborted();
+        acceptedAt = new Date().toISOString();
+        admitted(kind);
         const output = await operations[kind]();
         await emit({
           accepted_at: acceptedAt,
@@ -399,11 +464,11 @@ export const runLoad = async (phase, clients, stop) => {
   ) {
     const elapsed = now();
     for (const [kind, interval] of [
-      ["http", phase.http_rps ? 1000 / phase.http_rps : Infinity],
-      ["telemetry", 1000],
-      ["verification", 1000],
-      ["foreground", 10_000],
-      ["workflow", 10_000],
+      ["http", intervals.http],
+      ["telemetry", intervals.telemetry],
+      ["verification", intervals.verification],
+      ["foreground", intervals.foreground],
+      ["workflow", intervals.workflow],
     ]) {
       if (phase.http_rps === 0 || elapsed < next[kind]) {
         continue;
@@ -467,15 +532,26 @@ export const discoverTelemetry = async (query, signal) => {
     );
     const names = new Set(columns.data.map((column) => column.name));
     const attributes = kind === "logs" ? "LogAttributes" : "SpanAttributes";
-    for (const name of ["Timestamp", "ServiceName", attributes]) {
+    for (const name of [
+      "Timestamp",
+      "ServiceName",
+      attributes,
+      ...(kind === "traces" ? ["SpanName"] : []),
+    ]) {
       assert.ok(names.has(name), `required telemetry column missing: ${name}`);
     }
     const metadata = tables.data.find((value) => value.name === table);
-    assert.ok(
-      metadata.sorting_key.includes("Timestamp") &&
-        metadata.sorting_key.includes("ServiceName"),
-      "unsupported telemetry sort key"
-    );
+    const expectedKey =
+      kind === "logs"
+        ? "toStartOfFiveMinutes(Timestamp),ServiceName,Timestamp"
+        : "ServiceName,SpanName,toDateTime(Timestamp)";
+    for (const key of ["sorting_key", "primary_key"]) {
+      assert.equal(
+        metadata[key].replaceAll(/\s/gu, ""),
+        expectedKey,
+        `unsupported telemetry ${key}`
+      );
+    }
     schemas[kind] = { attributes, columns: columns.data, table, ...metadata };
   }
   return schemas;
@@ -489,7 +565,11 @@ const batchPredicate = (seed, events, attributes) => {
   );
   const [first] = events;
   const last = events.at(-1);
-  return `ServiceName='capacity-synthetic' AND Timestamp>=fromUnixTimestamp64Milli(${first.event_time_ms}) AND Timestamp<=fromUnixTimestamp64Milli(${last.event_time_ms}) AND ${attributes}['capacity.run_id']='${seed.run_id}' AND ${attributes}['capacity.cohort']='${seed.cohort ?? "current"}' AND toUInt32OrZero(${attributes}['capacity.sequence']) BETWEEN ${first.sequence} AND ${last.sequence}`;
+  const prefix =
+    attributes === "SpanAttributes"
+      ? `SpanName='${spanName(seed)}' AND toDateTime(Timestamp)>=toDateTime(fromUnixTimestamp64Milli(${first.event_time_ms})) AND toDateTime(Timestamp)<=toDateTime(fromUnixTimestamp64Milli(${last.event_time_ms}))`
+      : `toStartOfFiveMinutes(Timestamp)>=toStartOfFiveMinutes(fromUnixTimestamp64Milli(${first.event_time_ms})) AND toStartOfFiveMinutes(Timestamp)<=toStartOfFiveMinutes(fromUnixTimestamp64Milli(${last.event_time_ms}))`;
+  return `${prefix} AND ServiceName='capacity-synthetic' AND Timestamp>=fromUnixTimestamp64Milli(${first.event_time_ms}) AND Timestamp<=fromUnixTimestamp64Milli(${last.event_time_ms}) AND ${attributes}['capacity.run_id']='${seed.run_id}' AND ${attributes}['capacity.cohort']='${seed.cohort ?? "current"}' AND toUInt32OrZero(${attributes}['capacity.sequence']) BETWEEN ${first.sequence} AND ${last.sequence}`;
 };
 /* eslint-disable no-await-in-loop -- Keep batches bounded and verify each response before admitting the next operation. */
 export const verifyTelemetryBatch = async (

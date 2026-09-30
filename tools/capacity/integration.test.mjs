@@ -10,6 +10,7 @@ import { test } from "vitest";
 
 import {
   createCapacityRedactor,
+  prepareTracePruningFixture,
   createReaderProbe,
   executePostgresSql,
   finalizeIntegration,
@@ -400,5 +401,51 @@ test("pinned CLI poller timestamps use seconds and nanos", async () => {
   assert.deepEqual(
     freshWorkerPollers({ pollers: [poller] }, "owned", 1_790_776_551_000),
     []
+  );
+});
+
+test("trace pruning setup preserves schema and bounds every acknowledged insert", () => {
+  const statements = [];
+  const source =
+    "CREATE TABLE otel.otel_traces (Timestamp DateTime64(9)) ENGINE=MergeTree ORDER BY (ServiceName, SpanName, toDateTime(Timestamp)) TTL toDateTime(Timestamp) + toIntervalDay(3)";
+  const runId = "pruning-test";
+  const table = "capacity_trace_pruning_pruning_test";
+  const fixture = prepareTracePruningFixture({
+    ch: (sql) => {
+      statements.push(sql);
+      if (sql === "SHOW CREATE TABLE otel.otel_traces") {
+        return source;
+      }
+      if (sql.startsWith("SHOW CREATE TABLE")) {
+        return source.replace("otel.otel_traces", `otel.${table}`);
+      }
+      return JSON.stringify({ data: [{ rows: 1_296_000 }] });
+    },
+    epochMs: 1_800_000_000_000,
+    runId,
+  });
+  assert.equal(fixture.table, table);
+  const inserts = statements.filter((sql) => sql.startsWith("INSERT"));
+  assert.equal(inserts.length, 130);
+  assert.ok(
+    inserts.every(
+      (sql) =>
+        /numbers\((?:10000|6000)\)/u.test(sql) &&
+        sql.includes("async_insert=0") &&
+        sql.includes("max_rows_to_read=50000") &&
+        sql.includes("max_memory_usage=134217728") &&
+        sql.includes("max_execution_time=5")
+    )
+  );
+  assert.match(inserts.at(-1), /numbers\(6000\)/u);
+  assert.ok(statements.every((sql) => !/ALTER|OPTIMIZE|DELETE/u.test(sql)));
+  assert.throws(() =>
+    prepareTracePruningFixture({
+      ch: () => {
+        throw new Error("must not execute");
+      },
+      epochMs: 1,
+      runId: "unsafe'",
+    })
   );
 });

@@ -558,6 +558,45 @@ const verifyTelemetry = async ({
   };
 };
 
+// Owned setup-only access-path fixture; never passed as credentials to runtime clients.
+export const prepareTracePruningFixture = ({ ch, runId, epochMs }) => {
+  assert.match(runId, /^[a-z0-9-]{1,64}$/u);
+  assert.ok(Number.isSafeInteger(epochMs) && epochMs > 0);
+  const table = `capacity_trace_pruning_${runId.replaceAll("-", "_")}`;
+  const settings =
+    "max_execution_time=5,max_memory_usage=134217728,max_rows_to_read=50000,max_bytes_to_read=67108864,read_overflow_mode='throw',result_overflow_mode='throw',timeout_overflow_mode='throw'";
+  const source = ch("SHOW CREATE TABLE otel.otel_traces").trim();
+  assert.match(source, /TTL .*toIntervalDay\(3\)/u);
+  ch(`CREATE TABLE otel.${table} AS otel.otel_traces`);
+  const clone = ch(`SHOW CREATE TABLE otel.${table}`).trim();
+  assert.equal(clone.replace(`otel.${table}`, "otel.otel_traces"), source);
+  for (let offset = 0; offset < 1_296_000; offset += 10_000) {
+    const size = Math.min(10_000, 1_296_000 - offset);
+    ch(
+      `INSERT INTO otel.${table} (Timestamp,ServiceName,SpanName,SpanAttributes) WITH (number+${offset}+1)*2 AS sequence, toString(sequence) AS seq, lower(hex(SHA256(concat('${runId}:current:',seq)))) AS id SELECT fromUnixTimestamp64Milli(${epochMs}+intDiv((sequence-1)*1000,200)), 'capacity-synthetic', 'capacity/${runId}/current', map('capacity.run_id','${runId}','capacity.cohort','current','capacity.sequence',seq,'capacity.id',id,'capacity.payload',concat('{"cohort":"current","id":"',id,'","run_id":"${runId}","sequence":',seq,'}')) FROM numbers(${size}) SETTINGS ${settings},async_insert=0`
+    );
+  }
+  const parts = () =>
+    JSON.parse(
+      ch(
+        `SELECT count() AS parts,sum(rows) AS rows,max(level) AS merge_level,sum(bytes_on_disk) AS bytes FROM system.parts WHERE active AND database='otel' AND table='${table}' LIMIT 1 SETTINGS ${settings} FORMAT JSON`
+      )
+    );
+  assert.equal(Number(parts().data[0].rows), 1_296_000);
+  return {
+    clone,
+    parts,
+    source,
+    table,
+    witnesses: () =>
+      JSON.parse(
+        ch(
+          `SELECT query_id,log_comment,read_rows,read_bytes,memory_usage,exception_code,query_duration_ms FROM system.query_log WHERE type='QueryFinish' AND event_time>=fromUnixTimestamp64Milli(${Date.now() - 60_000}) AND startsWith(log_comment,'${runId}-pruning-') ORDER BY log_comment LIMIT 20 SETTINGS ${settings} FORMAT JSON`
+        )
+      ),
+  };
+};
+
 export const integrate = async (
   runId,
   { diagnoseBootstrap = false, localCheck } = {}
@@ -1466,6 +1505,8 @@ export const integrate = async (
             table: name,
           };
         },
+        prepareTracePruning: (epochMs) =>
+          prepareTracePruningFixture({ ch, epochMs, runId }),
         redact,
         retentionSnapshot: () => ({
           mutations: JSON.parse(

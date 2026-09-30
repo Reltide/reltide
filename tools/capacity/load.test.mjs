@@ -11,6 +11,8 @@ import {
   telemetryEvent,
   createForegroundPermit,
   discoverRequests,
+  discoverTelemetry,
+  verifyTelemetryBatch,
   runLoad,
   seedAnalyticsFixture,
   seedTelemetry,
@@ -330,7 +332,12 @@ test("OTLP carries deterministic identifiers and distinct signal shapes", () => 
     .spans;
   assert.equal(span.traceId, trace.id.slice(0, 32));
   assert.equal(span.spanId, trace.id.slice(32, 48));
-  assert.equal(span.name, trace.payload);
+  assert.equal(span.name, "capacity/load-test/current");
+  assert.equal(
+    span.attributes.find(({ key }) => key === "capacity.payload").value
+      .stringValue,
+    trace.payload
+  );
 });
 test("a guarded queued foreground request never executes", async () => {
   const barrier = Promise.withResolvers();
@@ -475,4 +482,190 @@ test("ordinary expiry cannot pass after its deadline", async () => {
   } finally {
     clockSpy.mockRestore();
   }
+});
+
+test("partial and non-divisor seed batches stay within every one-second window", async () => {
+  /* eslint-disable no-await-in-loop -- Exercise each independent deterministic pacing schedule. */
+  for (const batch of [200, 150]) {
+    const time = clock();
+    const submissions = [];
+    await seedTelemetry(
+      { ...seed, ...time, batch },
+      520,
+      (value) => {
+        submissions.push({ at: time.now(), count: value.events.length });
+        return { accepted: value.events.length };
+      },
+      new AbortController().signal
+    );
+    for (const { at } of submissions) {
+      const inWindow = submissions
+        .filter((value) => value.at > at - 1000 && value.at <= at)
+        .reduce((sum, value) => sum + value.count, 0);
+      assert.ok(inWindow <= 200, `${inWindow} events in window ending ${at}`);
+    }
+  }
+  /* eslint-enable no-await-in-loop */
+});
+
+test("phase transitions retain actual workflow and query admission cadence", async () => {
+  const time = clock();
+  const admissions = { analytics: [], search: [], workflow: [] };
+  const delayed = new Set();
+  const clients = {
+    ...time,
+    analytics: () => admissions.analytics.push(time.now()),
+    emit: async (event) => {
+      if (event.outcome === "submitted" && !delayed.has(event.kind)) {
+        delayed.add(event.kind);
+        await immediate();
+        time.sleep(400);
+      }
+    },
+    http: () => {},
+    requests: { api: ["p"], app: ["a"], docs: ["d"], web: ["w"] },
+    schedule: {},
+    search: () => {
+      admissions.search.push(time.now());
+      if (admissions.search.length === 1) {
+        time.sleep(700);
+      }
+    },
+    sleep: async (ms) => {
+      time.sleep(ms);
+      await immediate();
+    },
+    telemetry: () => ({ accepted: 10 }),
+    workflow: () => admissions.workflow.push(time.now()),
+  };
+  const stop = new AbortController().signal;
+  await runLoad(
+    { duration_ms: 9995, http_rps: 1, name: "first" },
+    clients,
+    stop
+  );
+  await runLoad(
+    { duration_ms: 20_000, http_rps: 1, name: "second" },
+    { ...clients },
+    stop
+  );
+  for (const [kind, starts] of Object.entries(admissions)) {
+    assert.ok(starts.length >= 2, `${kind} must actually repeat`);
+    assert.ok(
+      starts.slice(1).every((at, index) => at - starts[index] >= 10_000),
+      `${kind} admissions violate cadence: ${starts}`
+    );
+  }
+});
+
+test("adjacent short phases cannot admit a second workflow before ten seconds", async () => {
+  const time = clock();
+  const starts = [];
+  const clients = {
+    ...time,
+    analytics: () => {},
+    emit: () => {},
+    http: () => {},
+    requests: { api: ["p"], app: ["a"], docs: ["d"], web: ["w"] },
+    search: () => {},
+    telemetry: () => ({ accepted: 10 }),
+    workflow: () => starts.push(time.now()),
+  };
+  const stop = new AbortController().signal;
+  await runLoad(
+    { duration_ms: 9995, http_rps: 1, name: "first" },
+    clients,
+    stop
+  );
+  await runLoad(
+    { duration_ms: 20, http_rps: 1, name: "second" },
+    clients,
+    stop
+  );
+  assert.ok(starts.slice(1).every((at, index) => at - starts[index] >= 10_000));
+});
+
+test("trace verification filters the full observed primary-key prefix", async () => {
+  const events = [2, 4, 6].map((sequence) => telemetryEvent(seed, sequence));
+  const queries = [];
+  await verifyTelemetryBatch(
+    seed,
+    { events },
+    expirySchemas,
+    (sql) => {
+      queries.push(sql);
+      return sql.includes("uniqExact")
+        ? {
+            data: [
+              {
+                checksum_errors: 0,
+                rows: 3,
+                sequence_sum: 12,
+                unique_sequences: 3,
+              },
+            ],
+          }
+        : { data: events.map(({ id, sequence }) => ({ id, sequence })) };
+    },
+    new AbortController().signal
+  );
+  for (const sql of queries) {
+    assert.match(sql, /ServiceName='capacity-synthetic'/u);
+    assert.match(sql, /SpanName='capacity\/load-test\/current'/u);
+    assert.match(
+      sql,
+      /toDateTime\(Timestamp\)>=toDateTime\(fromUnixTimestamp64Milli\(/u
+    );
+    assert.match(
+      sql,
+      /toDateTime\(Timestamp\)<=toDateTime\(fromUnixTimestamp64Milli\(/u
+    );
+    assert.match(sql, /max_rows_to_read=50000/u);
+  }
+});
+
+const telemetrySchemaQuery = (traceKey) => (sql) => {
+  if (sql.includes("system.databases")) {
+    return { data: [{ name: "otel" }] };
+  }
+  if (sql.includes("system.columns")) {
+    return {
+      data: [
+        "Timestamp",
+        "ServiceName",
+        "SpanName",
+        "LogAttributes",
+        "SpanAttributes",
+      ].map((name) => ({ name })),
+    };
+  }
+  return {
+    data: [
+      {
+        name: "otel_logs",
+        primary_key: "toStartOfFiveMinutes(Timestamp), ServiceName, Timestamp",
+        sorting_key: "toStartOfFiveMinutes(Timestamp), ServiceName, Timestamp",
+      },
+      { name: "otel_traces", primary_key: traceKey, sorting_key: traceKey },
+    ],
+  };
+};
+
+test("schema discovery rejects reordered or missing primary-key prefixes", async () => {
+  const { signal } = new AbortController();
+  await discoverTelemetry(
+    telemetrySchemaQuery("ServiceName, SpanName, toDateTime(Timestamp)"),
+    signal
+  );
+  await assert.rejects(
+    discoverTelemetry(
+      telemetrySchemaQuery("ServiceName, Timestamp, SpanName"),
+      signal
+    ),
+    /sort|primary/u
+  );
+  await assert.rejects(
+    discoverTelemetry(telemetrySchemaQuery("Timestamp, ServiceName"), signal),
+    /sort|primary/u
+  );
 });
