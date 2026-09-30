@@ -907,16 +907,23 @@ export const integrate = async (runId) => {
       ).trim(),
       "0"
     );
-    const fixtureRequest = (sql, settings = "") =>
+    const readerRequest = (user, password, sql, settings = "") =>
       fetch(`http://${address("clickhouse")}:8123/?${settings}`, {
         body: sql,
         headers: {
-          "X-ClickHouse-Key": env.CAPACITY_CH_FIXTURE_PASSWORD,
-          "X-ClickHouse-User": "capacity_fixture",
+          "X-ClickHouse-Key": password,
+          "X-ClickHouse-User": user,
         },
         method: "POST",
         signal: AbortSignal.timeout(10_000),
       });
+    const fixtureRequest = (sql, settings = "") =>
+      readerRequest(
+        "capacity_fixture",
+        env.CAPACITY_CH_FIXTURE_PASSWORD,
+        sql,
+        settings
+      );
     const denials = [
       ["INSERT INTO capacity_analytics.ledger_sample VALUES ('denied',1)", ""],
       ["SELECT count() FROM otel.otel_logs", ""],
@@ -945,6 +952,48 @@ export const integrate = async (runId) => {
       settings,
       sql,
     }));
+    const timeoutDenials = [
+      ["SELECT 1 SETTINGS timeout_overflow_mode='break'", ""],
+      ["SELECT 1", "timeout_overflow_mode=break"],
+      ["SET timeout_overflow_mode='break'", ""],
+    ];
+    evidence.reader_timeout_guards = await Promise.all(
+      [
+        ["capacity_fixture", env.CAPACITY_CH_FIXTURE_PASSWORD],
+        ["capacity_ui", env.CAPACITY_CH_UI_PASSWORD],
+      ].map(async ([user, password]) => {
+        const effective = await readerRequest(
+          user,
+          password,
+          "SELECT getSetting('timeout_overflow_mode') FORMAT TabSeparated"
+        );
+        assert.ok(effective.ok, `${user} must allow reading its timeout mode`);
+        const effectiveMode = await effective.text();
+        assert.equal(effectiveMode.trim(), "throw");
+        await Promise.all(
+          timeoutDenials.map(async ([sql, settings]) => {
+            const response = await readerRequest(user, password, sql, settings);
+            assert.ok(
+              !response.ok,
+              `${user} must reject partial-result timeouts`
+            );
+            const detail = await response.text();
+            assert.ok(
+              !detail.includes(password),
+              "denial must redact credential"
+            );
+            assert.match(detail, /Code: 452\./u);
+            assert.match(detail, /SETTING_CONSTRAINT_VIOLATION/u);
+            assert.match(detail, /timeout_overflow_mode/u);
+          })
+        );
+        return {
+          denials: timeoutDenials.map(([sql, settings]) => ({ settings, sql })),
+          timeout_overflow_mode: "throw",
+          user,
+        };
+      })
+    );
     dc(
       "up",
       "-d",
