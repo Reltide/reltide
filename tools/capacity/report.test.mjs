@@ -514,16 +514,21 @@ const fixture = () => {
     schema_version: 1,
   };
 };
-test("complete unit evidence passes; future missing evidence remains blocked", () => {
+test.each([
+  ["complete unit evidence passes", "complete", "PASS"],
+  ["missing future restore evidence remains blocked", "restores", "BLOCKED"],
+  ["missing foreground evidence remains blocked", "foreground", "BLOCKED"],
+])("%s", (_name, missing, expected) => {
   const e = fixture();
-  assert.equal(evaluateRun(e).combined, "PASS");
-  delete e.restores;
-  assert.equal(evaluateRun(e).combined, "BLOCKED");
-  const a = fixture();
-  a.events = a.events
-    .filter((x) => x.kind !== "foreground")
-    .map((x, i) => ({ ...x, sequence: i + 1 }));
-  assert.equal(evaluateRun(a).combined, "BLOCKED");
+  if (missing === "restores") {
+    delete e.restores;
+  }
+  if (missing === "foreground") {
+    e.events = e.events
+      .filter((x) => x.kind !== "foreground")
+      .map((x, i) => ({ ...x, sequence: i + 1 }));
+  }
+  assert.equal(evaluateRun(e).combined, expected);
 });
 for (const [name, mutate, want] of [
   [
@@ -690,7 +695,13 @@ test("reports whitelist data and keep endpoint-specific sample counts", () => {
   );
   assert.equal(report.metrics.http.app.p95_ms, 100);
 });
-test("CLI writes reports and returns 0/1/2, malformed or absent evidence stays blocked", async () => {
+test.each([
+  ["absent evidence", 2],
+  ["complete evidence", 0],
+  ["measured HTTP failure", 1],
+  ["missing restores with JSON/CSV/Markdown reports", 2],
+  ["malformed events with redacted output", 2],
+])("CLI writes reports: %s", async (scenario, expected) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "capacity-report-"));
   try {
     const cli = () =>
@@ -699,30 +710,42 @@ test("CLI writes reports and returns 0/1/2, malformed or absent evidence stays b
         ["tools/capacity/report.mjs", "--verdict", dir],
         { encoding: "utf-8" }
       );
-    assert.equal(cli().status, 2);
-    const e = fixture();
-    await writeFile(path.join(dir, "evidence.json"), JSON.stringify(e));
-    assert.equal(cli().status, 0);
-    e.events[0].status = 503;
-    await writeFile(path.join(dir, "evidence.json"), JSON.stringify(e));
-    assert.equal(cli().status, 1);
-    delete e.restores;
-    e.events[0].status = 200;
-    await writeFile(path.join(dir, "evidence.json"), JSON.stringify(e));
-    assert.equal(cli().status, 2);
-    const reports = await Promise.all(
-      ["json", "csv", "md"].map((ext) =>
-        readFile(path.join(dir, `report.${ext}`), "utf-8")
-      )
-    );
-    for (const report of reports) {
-      assert.ok(report.includes("BLOCKED"));
-      assert.ok(report.includes("p95_ms"));
+    if (scenario !== "absent evidence") {
+      const e = fixture();
+      if (scenario === "measured HTTP failure") {
+        e.events[0].status = 503;
+      }
+      if (
+        scenario === "missing restores with JSON/CSV/Markdown reports" ||
+        scenario === "malformed events with redacted output"
+      ) {
+        delete e.restores;
+        e.events[0].status = 200;
+      }
+      await writeFile(path.join(dir, "evidence.json"), JSON.stringify(e));
     }
-    await writeFile(path.join(dir, "load-events.ndjson"), '{"secret":"SECRET"');
-    assert.equal(cli().status, 2);
-    const redacted = await readFile(path.join(dir, "report.json"), "utf-8");
-    assert.ok(!redacted.includes("SECRET"));
+    if (scenario === "malformed events with redacted output") {
+      await writeFile(
+        path.join(dir, "load-events.ndjson"),
+        '{"secret":"SECRET"'
+      );
+    }
+    assert.equal(cli().status, expected);
+    if (scenario === "missing restores with JSON/CSV/Markdown reports") {
+      const reports = await Promise.all(
+        ["json", "csv", "md"].map((ext) =>
+          readFile(path.join(dir, `report.${ext}`), "utf-8")
+        )
+      );
+      for (const report of reports) {
+        assert.ok(report.includes("BLOCKED"));
+        assert.ok(report.includes("p95_ms"));
+      }
+    }
+    if (scenario === "malformed events with redacted output") {
+      const redacted = await readFile(path.join(dir, "report.json"), "utf-8");
+      assert.ok(!redacted.includes("SECRET"));
+    }
   } finally {
     await rm(dir, { force: true, recursive: true });
   }
@@ -1221,8 +1244,16 @@ test("round 2 unavailable HyperDX identifiers preserve measured failures", () =>
     assert.equal(evaluateRun(e).analytics, "FAIL");
   }
 });
-test("round 2 unavailable expiry counts do not fabricate increases", () => {
-  for (const value of [null, undefined, "", "0", false, {}]) {
+test.each([
+  ["null", null],
+  ["undefined", undefined],
+  ["empty string", ""],
+  ["numeric string", "0"],
+  ["false", false],
+  ["object", {}],
+])(
+  "round 2 unavailable expiry counts do not fabricate increases: %s",
+  (_name, value) => {
     const e = fixture();
     const index = e.events.findIndex(
       (v) => v.kind === "normal_expiry_observation" && v.cohort === "boundary"
@@ -1237,7 +1268,7 @@ test("round 2 unavailable expiry counts do not fabricate increases", () => {
     }
     assert.equal(evaluateRun(e).retention, "BLOCKED");
   }
-});
+);
 test("round 2 unavailable expiry time does not fabricate reversal", () => {
   const e = fixture();
   const index = e.events.findIndex(
