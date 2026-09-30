@@ -1129,3 +1129,80 @@ test("round 1 HyperDX uses the outer telemetry run separately from analytics", (
     .digest("hex");
   assert.equal(evaluateRun(e).analytics, "FAIL");
 });
+
+test("round 2 unavailable HyperDX identifiers stay incomplete", () => {
+  for (const value of [null, undefined, "", 0, {}]) {
+    const e = fixture();
+    e.events.find((v) => v.search).search.first_id = value;
+    assert.equal(evaluateRun(e).analytics, "BLOCKED");
+  }
+});
+test("round 2 unavailable HyperDX identifiers preserve measured failures", () => {
+  for (const update of [{ rows: 0 }, { elapsed_ms: 2001 }]) {
+    const e = fixture();
+    Object.assign(e.events.find((v) => v.search).search, {
+      first_id: null,
+      ...update,
+    });
+    assert.equal(evaluateRun(e).analytics, "FAIL");
+  }
+});
+test("round 2 unavailable expiry counts do not fabricate increases", () => {
+  for (const value of [null, undefined, "", "0", false, {}]) {
+    const e = fixture();
+    const index = e.events.findIndex(
+      (v) => v.kind === "normal_expiry_observation" && v.cohort === "boundary"
+    );
+    e.events.splice(index, 0, {
+      ...e.events[index],
+      observed_at: at(500),
+      remaining: value,
+    });
+    for (const [i, v] of e.events.entries()) {
+      v.sequence = i + 1;
+    }
+    assert.equal(evaluateRun(e).retention, "BLOCKED");
+  }
+});
+test("round 2 unavailable expiry time does not fabricate reversal", () => {
+  const e = fixture();
+  const index = e.events.findIndex(
+    (v) => v.kind === "normal_expiry_observation" && v.cohort === "boundary"
+  );
+  e.events.splice(index + 1, 0, { ...e.events[index], observed_at: "0" });
+  for (const [i, v] of e.events.entries()) {
+    v.sequence = i + 1;
+  }
+  assert.equal(evaluateRun(e).retention, "BLOCKED");
+});
+test("round 2 missing expiry count cannot hide a measured increase across the gap", () => {
+  const e = fixture();
+  const index = e.events.findIndex(
+    (v) => v.kind === "normal_expiry_observation" && v.cohort === "boundary"
+  );
+  e.events.splice(
+    index,
+    0,
+    { ...e.events[index], observed_at: at(250), remaining: 10 },
+    { ...e.events[index], observed_at: at(500), remaining: null }
+  );
+  for (const [i, v] of e.events.entries()) {
+    v.sequence = i + 1;
+  }
+  assert.equal(evaluateRun(e).retention, "FAIL");
+});
+test("round 2 missing expiry count cannot hide a measured time reversal", () => {
+  const e = fixture();
+  const index = e.events.findIndex(
+    (v) => v.kind === "normal_expiry_observation" && v.cohort === "boundary"
+  );
+  e.events.splice(index, 0, {
+    ...e.events[index],
+    observed_at: at(1500),
+    remaining: null,
+  });
+  for (const [i, v] of e.events.entries()) {
+    v.sequence = i + 1;
+  }
+  assert.equal(evaluateRun(e).retention, "FAIL");
+});

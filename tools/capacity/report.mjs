@@ -886,7 +886,7 @@ const searchResult = (s, e, search) => {
     .digest("hex");
   s.fail(
     (integer(search.rows) && search.rows === 0) ||
-      (search.first_id !== undefined && search.first_id !== expected),
+      (hash(search.first_id) && search.first_id !== expected),
     "HyperDX result contradicts telemetry fixture"
   );
 };
@@ -1053,7 +1053,8 @@ const restoreCompatibility = (s, r, receipts) => {
 };
 const expiryObservations = (s, counts, observations) => {
   let complete = true;
-  let before;
+  let previousCount;
+  let previousTime;
   let zero;
   for (const v of observations) {
     s.need(
@@ -1065,17 +1066,24 @@ const expiryObservations = (s, counts, observations) => {
       counts.complete && integer(v.remaining) && v.remaining > counts.stored,
       "expiry count exceeds measured cohort storage"
     );
-    if (before) {
-      s.fail(
-        Date.parse(v.observed_at) < Date.parse(before.observed_at) ||
-          v.remaining > before.remaining,
-        "cohort expiry observations contradict continuity"
-      );
-    }
+    s.fail(
+      (utc(v.observed_at) &&
+        utc(previousTime) &&
+        Date.parse(v.observed_at) < Date.parse(previousTime)) ||
+        (integer(v.remaining) &&
+          integer(previousCount) &&
+          v.remaining > previousCount),
+      "cohort expiry observations contradict continuity"
+    );
     if (v.remaining === 0 && utc(v.observed_at)) {
       zero = v;
     }
-    before = v;
+    if (integer(v.remaining)) {
+      previousCount = v.remaining;
+    }
+    if (utc(v.observed_at)) {
+      previousTime = v.observed_at;
+    }
   }
   return { complete, zero };
 };
