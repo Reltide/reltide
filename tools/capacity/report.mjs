@@ -3,7 +3,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
-import { readEvidence, serializeReport, writeReport } from "./report-io.mjs";
+import {
+  discardReports,
+  readEvidence,
+  serializeReport,
+  writeReport,
+} from "./report-io.mjs";
 
 const services = [
   "app",
@@ -124,9 +129,25 @@ const induced = (e, service, time) =>
       Date.parse(time) >= Date.parse(w.started_at) &&
       Date.parse(time) <= Date.parse(w.completed_at)
   );
-const continuity = (s, rows, id) => {
+const sequenceGap = (current, previous) =>
+  integer(current) && integer(previous) && current !== previous + 1;
+const continuity = (s, rows, id, { logical = false } = {}) => {
+  const partial = logical && rows.some((v) => !integer(v?.sequence));
+  if (partial) {
+    const known = rows.map((v) => v?.sequence).filter(integer);
+    // Unknown sequence values may fill gaps, but cannot repair duplicates or
+    // a sequence outside the range of this complete set of observed records.
+    s.fail(
+      new Set(known).size !== known.length ||
+        known.some((sequence) => sequence < 1 || sequence > rows.length),
+      "evidence sequence gap or reset"
+    );
+  }
   s.fail(
-    rows.length > 0 && integer(rows[0]?.sequence) && rows[0].sequence !== 1,
+    !partial &&
+      rows.length > 0 &&
+      integer(rows[0]?.sequence) &&
+      rows[0].sequence !== 1,
     "evidence sequence does not start at one"
   );
   for (const [i, row] of rows.entries()) {
@@ -136,9 +157,9 @@ const continuity = (s, rows, id) => {
       "mixed run identities"
     );
     s.need(integer(row?.sequence), "missing evidence sequence");
-    if (i) {
+    if (i && !partial) {
       s.fail(
-        integer(row?.sequence) && row.sequence !== rows[i - 1].sequence + 1,
+        sequenceGap(row?.sequence, rows[i - 1]?.sequence),
         "evidence sequence gap or reset"
       );
     }
@@ -161,6 +182,17 @@ const native = (e) =>
         !/local|pruning|shortened/u.test(v.kind ?? ""))
   );
 
+const containerChanges = (c, before) => {
+  const counted = integer(c.restart_count) && integer(before?.restart_count);
+  const identified = string(c.id) && string(before?.id);
+  return {
+    identity: identified && c.id !== before.id,
+    reset: counted && c.restart_count < before.restart_count,
+    restart: before
+      ? counted && c.restart_count > before.restart_count
+      : integer(c.restart_count) && c.restart_count > 0,
+  };
+};
 const containerSample = (s, e, x, prev, c) => {
   s.need(
     string(c.id) &&
@@ -173,24 +205,19 @@ const containerSample = (s, e, x, prev, c) => {
     "partial container metrics"
   );
   const before = list(prev?.containers).find((v) => v?.service === c.service);
+  const changes = containerChanges(c, before);
   const disruption =
     (c.running === false ||
-      (before
-        ? c.restart_count !== before.restart_count || c.id !== before.id
-        : c.restart_count > 0)) &&
+      changes.restart ||
+      changes.reset ||
+      changes.identity) &&
     induced(e, c.service, x.utc);
   s.fail(
-    (c.running === false ||
-      (before
-        ? c.restart_count > before.restart_count
-        : c.restart_count > 0)) &&
-      !disruption,
+    (c.running === false || changes.restart) && !disruption,
     "unexpected restart or exit"
   );
   s.fail(
-    before &&
-      (c.restart_count < before.restart_count || c.id !== before.id) &&
-      !disruption,
+    (changes.reset || changes.identity) && !disruption,
     "container identity or counter reset"
   );
 };
@@ -217,12 +244,19 @@ const hostSample = (s, e, x, prev, cs) => {
     "available memory below 512 MiB"
   );
   s.fail(
-    x.root_used_ratio > 0.7 ||
+    (finite(x.root_used_ratio) && x.root_used_ratio > 0.7) ||
       (finite(x.root_free_bytes) && x.root_free_bytes < 10 * 1024 * mib),
     "root disk guard exceeded"
   );
-  s.fail(x.oom_count > 0 || cs.some((c) => c.oom === true), "OOM detected");
-  s.fail(x.cpu_busy_ratio > 1 || x.root_used_ratio > 1, "invalid host ratios");
+  s.fail(
+    (finite(x.oom_count) && x.oom_count > 0) || cs.some((c) => c.oom === true),
+    "OOM detected"
+  );
+  s.fail(
+    (finite(x.cpu_busy_ratio) && x.cpu_busy_ratio > 1) ||
+      (finite(x.root_used_ratio) && x.root_used_ratio > 1),
+    "invalid host ratios"
+  );
   s.need(
     services.every((service) => cs.some((c) => c.service === service)),
     "steady service missing"
@@ -237,7 +271,10 @@ const hostSample = (s, e, x, prev, cs) => {
   }
 };
 const sampleInterval = (s, x, prev) => {
-  const delta = x.monotonic_ms - prev.monotonic_ms;
+  const delta =
+    finite(x.monotonic_ms) && finite(prev.monotonic_ms)
+      ? x.monotonic_ms - prev.monotonic_ms
+      : undefined;
   s.need(
     finite(delta) && delta > 0 && delta <= 1500,
     "one-second sample cadence incomplete"
@@ -247,7 +284,8 @@ const sampleInterval = (s, x, prev) => {
     "nonmonotonic host samples"
   );
   s.need(
-    utc(prev.utc) &&
+    utc(x.utc) &&
+      utc(prev.utc) &&
       Math.abs(Date.parse(x.utc) - Date.parse(prev.utc) - delta) <= 1000,
     "UTC sample continuity missing"
   );
@@ -271,8 +309,12 @@ const resourceWindow = (s, x, prev, delta, queues, totals, peaks) => {
       delta,
       end: x.monotonic_ms,
       swap:
-        x.swap_in_bytes > prev.swap_in_bytes ||
-        x.swap_out_bytes > prev.swap_out_bytes,
+        (finite(x.swap_in_bytes) &&
+          finite(prev.swap_in_bytes) &&
+          x.swap_in_bytes > prev.swap_in_bytes) ||
+        (finite(x.swap_out_bytes) &&
+          finite(prev.swap_out_bytes) &&
+          x.swap_out_bytes > prev.swap_out_bytes),
     });
     totals[key] += delta;
     while (q.length && x.monotonic_ms - q[0].end >= limit) {
@@ -329,6 +371,8 @@ const hostEvidence = (s, e, metrics) => {
     samples.length > 0 &&
       utc(start) &&
       utc(end) &&
+      utc(samples[0].utc) &&
+      utc(samples.at(-1).utc) &&
       Date.parse(samples[0].utc) <= Date.parse(start) &&
       Date.parse(samples.at(-1).utc) >= Date.parse(end),
     "host samples truncated"
@@ -340,7 +384,10 @@ const hostEvidence = (s, e, metrics) => {
     "malformed integration containers"
   )) {
     s.fail(c.oom === true, "OOM detected");
-    s.fail(c.restart_count > 0, "unexpected integration restart");
+    s.fail(
+      integer(c.restart_count) && c.restart_count > 0,
+      "unexpected integration restart"
+    );
   }
 };
 const phaseDuration = (s, p) => {
@@ -476,6 +523,31 @@ const httpMetrics = (s, e, metrics) => {
     );
   }
 };
+const collectorEvidence = (s, e) => {
+  const rows = list(e.collector);
+  continuity(s, rows, e.run_id);
+  s.need(rows.length >= 2, "collector counters missing");
+  for (const [i, c] of rows.entries()) {
+    s.need(
+      ["accepted", "dropped", "rejected"].every((k) => integer(c[k])),
+      "partial collector counters"
+    );
+    s.fail(
+      (integer(c.dropped) && c.dropped > 0) ||
+        (integer(c.rejected) && c.rejected > 0),
+      "collector dropped or rejected"
+    );
+    if (i) {
+      s.fail(
+        ["accepted", "dropped", "rejected"].some(
+          (k) =>
+            integer(c[k]) && integer(rows[i - 1][k]) && c[k] < rows[i - 1][k]
+        ),
+        "collector counter reset"
+      );
+    }
+  }
+};
 const workloadMetrics = (s, e, metrics) => {
   const completed = list(e.events).filter(
     (v) => v.kind === "workflow_completed"
@@ -500,7 +572,7 @@ const workloadMetrics = (s, e, metrics) => {
     (v) =>
       v.kind === "telemetry_stored" &&
       list(e.manifest?.phases).some(
-        (p) => p?.name === v.phase && p.http_rps > 0
+        (p) => p?.name === v.phase && finite(p.http_rps) && p.http_rps > 0
       )
   );
   const lags = [];
@@ -510,10 +582,15 @@ const workloadMetrics = (s, e, metrics) => {
       v.proofs,
       "telemetry storage proof malformed"
     )) {
-      const lag = Date.parse(proof.stored_at) - proof.event_time_ms?.[0];
+      const eventTime = proof.event_time_ms?.[0];
+      const lag =
+        utc(proof.stored_at) && integer(eventTime)
+          ? Date.parse(proof.stored_at) - eventTime
+          : undefined;
       s.need(finite(lag), "telemetry search timing missing");
       s.fail(
-        proof.checksum_errors > 0 || lag > 30_000,
+        (integer(proof.checksum_errors) && proof.checksum_errors > 0) ||
+          (finite(lag) && lag > 30_000),
         "telemetry verification/search delay failed"
       );
       if (finite(lag)) {
@@ -529,28 +606,21 @@ const workloadMetrics = (s, e, metrics) => {
         !induced(e, v.service, v.completed_at),
       "unexpected operation failure"
     );
-    s.fail(v.rejected > 0 || v.dropped > 0, "telemetry dropped or rejected");
+    s.need(
+      ["rejected", "dropped"].every((k) => v[k] === undefined || integer(v[k])),
+      "partial telemetry failure counters"
+    );
+    s.fail(
+      (integer(v.rejected) && v.rejected > 0) ||
+        (integer(v.dropped) && v.dropped > 0),
+      "telemetry dropped or rejected"
+    );
     s.fail(
       v.kind === "guard_trigger" && v.guard?.stop === true,
       "load guard stopped run"
     );
   }
-  const rows = list(e.collector);
-  continuity(s, rows, e.run_id);
-  s.need(rows.length >= 2, "collector counters missing");
-  for (const [i, c] of rows.entries()) {
-    s.need(
-      ["accepted", "dropped", "rejected"].every((k) => integer(c[k])),
-      "partial collector counters"
-    );
-    s.fail(c.dropped > 0 || c.rejected > 0, "collector dropped or rejected");
-    if (i) {
-      s.fail(
-        ["accepted", "dropped", "rejected"].some((k) => c[k] < rows[i - 1][k]),
-        "collector counter reset"
-      );
-    }
-  }
+  collectorEvidence(s, e);
 };
 const producerCounters = (s, e) => {
   let previous;
@@ -958,10 +1028,11 @@ const proofMeasurements = (s, proofs, cohort) => {
       "storage proof measurement missing"
     );
     s.fail(
-      proof.checksum_errors > 0 ||
+      (integer(proof.checksum_errors) && proof.checksum_errors > 0) ||
         (times.every(integer) &&
           times.length === 2 &&
-          (times[1] < times[0] || Date.parse(proof.stored_at) < times[1])),
+          (times[1] < times[0] ||
+            (utc(proof.stored_at) && Date.parse(proof.stored_at) < times[1]))),
       "storage proof measurement contradicts event time"
     );
     if (integer(times[1])) {
@@ -1651,8 +1722,8 @@ const recoveryEvidence = (s, e, metrics) => {
       s.need(validRestore(r), "restore fields incomplete");
       s.fail(
         r.source_volume_unmounted === false ||
-          r.rpo_seconds > 300 ||
-          r.rto_seconds > 1800,
+          (finite(r.rpo_seconds) && r.rpo_seconds > 300) ||
+          (finite(r.rto_seconds) && r.rto_seconds > 1800),
         "restore protection/RPO/RTO failed"
       );
       const receipts = list(e.backups).filter((v) => v.kind === kind);
@@ -1806,13 +1877,18 @@ const evaluate = (input = {}) => {
     "input artifact missing or malformed"
   );
   artifactIdentities(integrity, e);
-  const ordered = list(e.events).toSorted((a, b) => a.sequence - b.sequence);
+  const ordered = list(e.events).toSorted((a, b) => {
+    if (!integer(a.sequence)) {
+      return integer(b.sequence) ? 1 : 0;
+    }
+    return integer(b.sequence) ? a.sequence - b.sequence : -1;
+  });
   metrics.event_order = {
     count: ordered.length,
     physical_reordering: ordered.some((v, i) => v !== e.events[i]),
   };
   e.events = ordered;
-  continuity(integrity, ordered, e.run_id);
+  continuity(integrity, ordered, e.run_id, { logical: true });
   artifactConsistency(integrity, e);
   for (const c of Object.values(e.manifest?.checks ?? {})) {
     integrity.fail(c?.passed === false, "required check failed");
@@ -1886,6 +1962,7 @@ if (
         report.verdicts.combined
       ];
     } catch {
+      await discardReports(process.argv[3]);
       process.stderr.write(
         "BLOCKED: evidence could not be evaluated or report could not be written\n"
       );

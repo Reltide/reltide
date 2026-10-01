@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -514,6 +514,286 @@ const fixture = () => {
     schema_version: 1,
   };
 };
+// Invalid JSON fields must not abort a scan or erase an independent failure.
+const malformedScalar = { toString: null };
+const jsonInput = (evidence) => {
+  // Exercise the serialized JSON boundary rather than structured-clone behavior.
+  const serialized = JSON.stringify(evidence);
+  return JSON.parse(serialized);
+};
+const steadyProof = (e) =>
+  e.events.find(
+    (v) =>
+      v.kind === "telemetry_stored" &&
+      e.manifest.phases.some((p) => p.name === v.phase && p.http_rps > 0)
+  ).proofs[0];
+const isolatedMetrics = [
+  ...[
+    "root_used_ratio",
+    "cpu_busy_ratio",
+    "oom_count",
+    "monotonic_ms",
+    "utc",
+    "swap_in_bytes",
+    "swap_out_bytes",
+  ].map((field) => [
+    `host ${field}`,
+    "capacity",
+    (e) => {
+      e.host_samples[0][field] = malformedScalar;
+    },
+    (e) => {
+      e.host_samples[1].mem_available_bytes = 511 * 1024 ** 2;
+    },
+    "available memory below 512 MiB",
+  ]),
+  [
+    "container restart_count",
+    "capacity",
+    (e) => {
+      e.host_samples[0].containers[0].restart_count = malformedScalar;
+    },
+    (e) => {
+      e.host_samples[1].mem_available_bytes = 511 * 1024 ** 2;
+    },
+    "available memory below 512 MiB",
+  ],
+  ...["rpo_seconds", "rto_seconds"].map((field) => [
+    `restore ${field}`,
+    "recovery",
+    (e) => {
+      e.restores[0][field] = malformedScalar;
+    },
+    (e) => {
+      e.restores[1].checks.passed = false;
+    },
+    "restore verification failed",
+  ]),
+  ...["stored_at", "checksum_errors", "event_time_ms"].map((field) => [
+    `telemetry proof ${field}`,
+    "capacity",
+    (e) => {
+      steadyProof(e)[field] =
+        field === "event_time_ms" ? [malformedScalar, 1] : malformedScalar;
+    },
+    (e) => {
+      e.events.at(-1).dropped = 1;
+    },
+    "telemetry dropped or rejected",
+  ]),
+  ...["rejected", "dropped"].map((field) => [
+    `event ${field}`,
+    "capacity",
+    (e) => {
+      e.events[0][field] = malformedScalar;
+    },
+    (e) => {
+      e.events.at(-1).dropped = 1;
+    },
+    "telemetry dropped or rejected",
+  ]),
+  ...["accepted", "dropped", "rejected"].map((field) => [
+    `collector ${field}`,
+    "capacity",
+    (e) => {
+      e.collector[0][field] = malformedScalar;
+    },
+    (e) => {
+      e.collector[1].dropped = 1;
+    },
+    "collector dropped or rejected",
+  ]),
+];
+test.each(
+  isolatedMetrics.flatMap(([name, component, change, fail, reason]) => [
+    [name, "incomplete only", component, change, null, "BLOCKED", reason],
+    [name, "independent failure", component, change, fail, "FAIL", reason],
+  ])
+)(
+  "review metric isolation %s with %s",
+  (_name, _scenario, component, change, fail, expected, reason) => {
+    const e = fixture();
+    change(e);
+    fail?.(e);
+    const report = createReport(jsonInput(e));
+    assert.equal(report.verdicts[component], expected);
+    assert.equal(report.verdicts.combined, expected);
+    assert.ok(report.reasons[component].some((v) => v.status === "BLOCKED"));
+    assert.ok(
+      !report.reasons[component].some(
+        (v) => v.reason === "malformed component evidence"
+      )
+    );
+    if (fail) {
+      assert.ok(
+        report.reasons[component].some(
+          (v) => v.status === "FAIL" && v.reason === reason
+        )
+      );
+    }
+  }
+);
+test("review metric isolation preserves a same-sample OOM", () => {
+  const e = fixture();
+  e.host_samples[0].root_used_ratio = malformedScalar;
+  e.host_samples[0].oom_count = 1;
+  const report = createReport(jsonInput(e));
+  assert.equal(report.verdicts.capacity, "FAIL");
+  assert.ok(report.reasons.capacity.some((v) => v.reason === "OOM detected"));
+});
+test.each([
+  [
+    "host ratio",
+    (e) => {
+      e.host_samples[0].root_used_ratio = "0.8";
+    },
+    "capacity",
+  ],
+  [
+    "restore RPO",
+    (e) => {
+      e.restores[0].rpo_seconds = "301";
+    },
+    "recovery",
+  ],
+])(
+  "review metric isolation rejects a numeric string in %s",
+  (_name, change, component) => {
+    const e = fixture();
+    change(e);
+    assert.equal(createReport(jsonInput(e)).verdicts[component], "BLOCKED");
+  }
+);
+
+test.each(
+  [
+    ["object", malformedScalar],
+    ["array", [malformedScalar]],
+    ["numeric string", "1"],
+    ["null", null],
+    ["empty object", {}],
+  ].flatMap(([name, value]) => [
+    [name, "incomplete only", value, false, "BLOCKED"],
+    [name, "HTTP failure", value, true, "FAIL"],
+  ])
+)(
+  "review sequence boundary %s with %s",
+  (_name, _scenario, value, failed, expected) => {
+    const e = fixture();
+    e.events[0].sequence = value;
+    if (failed) {
+      const http = e.events.find((v) => v.kind === "http");
+      http.status = 503;
+      http.outcome = "failed";
+    }
+    const report = createReport(jsonInput(e));
+    assert.equal(report.verdicts.combined, expected);
+    assert.ok(
+      report.reasons.capacity.some(
+        (v) => v.reason === "missing evidence sequence"
+      )
+    );
+    if (failed) {
+      assert.ok(
+        report.reasons.capacity.some(
+          (v) => v.reason === "unexpected HTTP failure"
+        )
+      );
+    }
+  }
+);
+test("review sequence boundary retains physical reordering with incomplete sequences", () => {
+  const e = fixture();
+  e.events[1].sequence = malformedScalar;
+  [e.events[2], e.events[3]] = [e.events[3], e.events[2]];
+  assert.equal(createReport(jsonInput(e)).verdicts.combined, "BLOCKED");
+});
+test.each(["duplicate", "out of range"])(
+  "review sequence boundary preserves a known %s failure",
+  (kind) => {
+    const e = fixture();
+    e.events[0].sequence = malformedScalar;
+    e.events[2].sequence =
+      kind === "duplicate" ? e.events[1].sequence : e.events.length + 1;
+    assert.equal(createReport(jsonInput(e)).verdicts.combined, "FAIL");
+  }
+);
+test.each([
+  [false, 2, "BLOCKED"],
+  [true, 1, "FAIL"],
+])(
+  "review sequence CLI replaces prior PASS files with failure=%s",
+  async (failed, exit, verdict) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "capacity-sequence-"));
+    const cli = () =>
+      spawnSync(
+        process.execPath,
+        ["tools/capacity/report.mjs", "--verdict", dir],
+        { encoding: "utf-8" }
+      );
+    try {
+      const e = fixture();
+      await writeFile(path.join(dir, "evidence.json"), JSON.stringify(e));
+      assert.equal(cli().status, 0);
+      e.events[0].sequence = malformedScalar;
+      if (failed) {
+        e.events.find((v) => v.kind === "http").status = 503;
+      }
+      await writeFile(path.join(dir, "evidence.json"), JSON.stringify(e));
+      const result = cli();
+      assert.equal(result.status, exit);
+      assert.equal(result.stdout.trim(), verdict);
+      const extensions = ["json", "csv", "md"];
+      const outputs = await Promise.all(
+        extensions.map((ext) =>
+          readFile(path.join(dir, `report.${ext}`), "utf-8")
+        )
+      );
+      for (const [index, output] of outputs.entries()) {
+        assert.ok(output.includes(verdict));
+        if (extensions[index] === "json") {
+          assert.equal(JSON.parse(output).verdicts.combined, verdict);
+        }
+      }
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  }
+);
+
+test("review sequence CLI discards reports after a write failure", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "capacity-report-write-"));
+  const cli = () =>
+    spawnSync(
+      process.execPath,
+      ["tools/capacity/report.mjs", "--verdict", dir],
+      { encoding: "utf-8" }
+    );
+  try {
+    await writeFile(path.join(dir, "evidence.json"), JSON.stringify(fixture()));
+    assert.equal(cli().status, 0);
+    // A real filesystem failure: CSV cannot overwrite a directory. Leave it
+    // intact while ensuring neither prior nor partial JSON/Markdown is usable.
+    await rm(path.join(dir, "report.csv"));
+    await mkdir(path.join(dir, "report.csv"));
+    await writeFile(path.join(dir, "report.csv", "preserve.txt"), "preserve");
+    assert.equal(cli().status, 2);
+    await Promise.all(
+      ["json", "md"].map((ext) =>
+        assert.rejects(readFile(path.join(dir, `report.${ext}`)), {
+          code: "ENOENT",
+        })
+      )
+    );
+    assert.equal(
+      await readFile(path.join(dir, "report.csv", "preserve.txt"), "utf-8"),
+      "preserve"
+    );
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
 // These cases catch silently skipped counter evidence and preserve proven failures.
 test.each([
   ["decimal", "1000000", "FAIL"],

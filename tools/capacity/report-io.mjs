@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -219,6 +219,13 @@ const flatten = (value, prefix = "") => {
   return [[prefix, String(value ?? "")]];
 };
 const csvCell = (value) => `"${value.replaceAll('"', '""')}"`;
+export const discardReports = async (directory) => {
+  await Promise.allSettled(
+    ["json", "csv", "md"].map((extension) =>
+      rm(path.join(directory, `report.${extension}`), { force: true })
+    )
+  );
+};
 export const writeReport = async (directory, report) => {
   const rows = Object.entries(report.verdicts);
   const fields = flatten(report);
@@ -246,7 +253,7 @@ export const writeReport = async (directory, report) => {
       "",
     ]),
   ].join("\n");
-  await Promise.all([
+  const writes = await Promise.allSettled([
     writeFile(
       path.join(directory, "report.json"),
       `${JSON.stringify(report, null, 2)}\n`,
@@ -255,5 +262,9 @@ export const writeReport = async (directory, report) => {
     writeFile(path.join(directory, "report.csv"), csv, { mode: 0o600 }),
     writeFile(path.join(directory, "report.md"), markdown, { mode: 0o600 }),
   ]);
+  const failed = writes.find((result) => result.status === "rejected");
+  if (failed) {
+    throw failed.reason;
+  }
   return report;
 };
