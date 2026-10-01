@@ -796,7 +796,8 @@ test("same-second volume replacement cannot retain its filesystem creation ident
     await mkdir(mountpoint, { recursive: true });
     const value = await stat(mountpoint, { bigint: true });
     return resource("volume", "v1", {
-      created_at: `${new Date(Number(value.birthtimeNs / 1_000_000n)).toISOString().slice(0, 19)}Z`,
+      // Hold Docker's coarse timestamp fixed while measuring real generations.
+      created_at: "2026-09-27T00:00:00Z",
       docker_root_dir: dockerRoot,
       driver: "local",
       generation: {
@@ -811,10 +812,6 @@ test("same-second volume replacement cannot retain its filesystem creation ident
     });
   };
   try {
-    // Keep both real creations clear of the next Docker timestamp boundary.
-    if (Date.now() % 1000 > 800) {
-      await sleep(1000 - (Date.now() % 1000));
-    }
     const first = await make();
     const manifestBefore = recordOwnership(
       "test-1",
