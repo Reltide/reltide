@@ -345,8 +345,30 @@ pub async fn probe_analytics_cancellable(
     output.elapsed_ms = start.elapsed().as_millis() as u64;
     Ok(output)
 }
-/// Execute one parameterized query with the same restricted connection and cancellation lifecycle.
-/// Integration tests use this path with their own disposable foreign table; no slow mode exists in the CLI.
+#[cfg(test)]
+async fn query_after_cleanup<T>(
+    result: Result<Option<T>, ProbeError>,
+    cleanup: impl Future<Output = Result<CancellationEvidence, ProbeError>>,
+) -> Result<(Result<Option<T>, ProbeError>, CancellationEvidence), ProbeError> {
+    Ok((result, cleanup.await?))
+}
+#[cfg(test)]
+fn query_diagnostic<T>(
+    result: &Result<Option<T>, ProbeError>,
+    evidence: &CancellationEvidence,
+) -> Value {
+    let query_outcome = match result {
+        Ok(None) => "cancelled",
+        Ok(Some(_)) => "completed",
+        Err(_) => "failed",
+    };
+    serde_json::json!({
+        "backend_pid": evidence.backend_pid,
+        "backend_gone": evidence.backend_gone,
+        "cancelled": matches!(result, Ok(None)),
+        "query_outcome": query_outcome,
+    })
+}
 #[cfg(test)]
 async fn query_analytics_cancellable(
     query: &str,
@@ -354,6 +376,19 @@ async fn query_analytics_cancellable(
     config: &AnalyticsConfig,
     stop: impl Future<Output = ()>,
 ) -> Result<CancellationEvidence, ProbeError> {
+    let (result, mut evidence) = query_analytics_attempt(query, run_id, config, stop).await?;
+    evidence.cancelled = result?.is_none();
+    Ok(evidence)
+}
+/// Execute one parameterized query with the same restricted connection and cancellation lifecycle.
+/// Integration tests retain its failed outcome and verified cleanup; no slow mode exists in the CLI.
+#[cfg(test)]
+async fn query_analytics_attempt(
+    query: &str,
+    run_id: &str,
+    config: &AnalyticsConfig,
+    stop: impl Future<Output = ()>,
+) -> Result<(Result<Option<()>, ProbeError>, CancellationEvidence), ProbeError> {
     validate_run_id(run_id)?;
     let start = Instant::now();
     let reader = Reader::connect(config).await?;
@@ -363,6 +398,7 @@ async fn query_analytics_cancellable(
                 .client
                 .query(query, &[&run_id])
                 .await
+                .map(|_| ())
                 .map_err(query_error)
         },
         stop,
@@ -370,9 +406,7 @@ async fn query_analytics_cancellable(
         reader.cancel(),
     )
     .await;
-    let (result, mut evidence) = after_cleanup(result, finish_reader(reader, config)).await?;
-    evidence.cancelled = result.is_none();
-    Ok(evidence)
+    query_after_cleanup(result, finish_reader(reader, config)).await
 }
 
 #[cfg(test)]
@@ -492,11 +526,15 @@ mod live_tests {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         };
-        let evidence = query_analytics_cancellable(&sql, &run_id(), &config(), cancelled)
+        let (result, mut evidence) = query_analytics_attempt(&sql, &run_id(), &config(), cancelled)
             .await
             .unwrap();
+        // Persist the failed query outcome and independently verified cleanup
+        // before the required positive acknowledgement assertion can fail.
+        let diagnostic = query_diagnostic(&result, &evidence);
+        std::fs::write(output, serde_json::to_string(&diagnostic).unwrap()).unwrap();
+        evidence.cancelled = matches!(result, Ok(None));
         assert!(evidence.cancelled && evidence.backend_gone);
-        std::fs::write(output, serde_json::to_string(&evidence).unwrap()).unwrap();
     }
 }
 
@@ -582,6 +620,51 @@ mod tests {
             ),
             ProbeError::Database
         ));
+    }
+    #[test]
+    fn foreign_http_abort_is_not_requested_cancellation() {
+        assert!(matches!(
+            classify_query_failure(
+                Some(&tokio_postgres::error::SqlState::SQL_ROUTINE_EXCEPTION),
+                Some("pg_clickhouse: query was aborted")
+            ),
+            ProbeError::Database
+        ));
+    }
+    #[tokio::test]
+    async fn failed_query_preserves_reader_cleanup_diagnostic() {
+        let result = query_after_cleanup::<()>(Err(ProbeError::Database), async {
+            Ok(CancellationEvidence {
+                backend_pid: 42,
+                cancelled: false,
+                backend_gone: true,
+            })
+        })
+        .await
+        .unwrap();
+        assert!(matches!(result.0, Err(ProbeError::Database)));
+        assert_eq!(
+            query_diagnostic(&result.0, &result.1),
+            serde_json::json!({
+                "backend_pid": 42, "backend_gone": true, "cancelled": false, "query_outcome": "failed"
+            })
+        );
+    }
+    #[test]
+    fn failed_query_diagnostic_contains_no_error_details() {
+        let result =
+            Err::<Option<()>, _>(ProbeError::Validation("secret query connection details"));
+        let evidence = CancellationEvidence {
+            backend_pid: 42,
+            cancelled: false,
+            backend_gone: true,
+        };
+        assert_eq!(
+            query_diagnostic(&result, &evidence),
+            serde_json::json!({
+                "backend_pid": 42, "backend_gone": true, "cancelled": false, "query_outcome": "failed"
+            })
+        );
     }
 
     #[test]

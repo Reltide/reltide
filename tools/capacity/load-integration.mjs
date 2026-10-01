@@ -112,7 +112,102 @@ const probe = async (command, input, env, emit, signal) => {
   return JSON.parse(output.trim().split("\n").at(-1));
 };
 
+const remoteDiagnostic = (evidence) => {
+  const backendGone =
+    evidence?.backend_gone === true &&
+    Number.isSafeInteger(evidence?.backend_pid) &&
+    evidence.backend_pid > 0;
+  const queryOutcome = ["cancelled", "completed", "failed"].includes(
+    evidence?.query_outcome
+  )
+    ? evidence.query_outcome
+    : "unavailable";
+  const cancelled =
+    evidence?.cancelled === true && queryOutcome === "cancelled";
+  return {
+    backend_gone: backendGone,
+    backend_pid: Number.isSafeInteger(evidence?.backend_pid)
+      ? evidence.backend_pid
+      : null,
+    cancelled,
+    query_outcome: queryOutcome,
+  };
+};
 /* eslint-disable no-await-in-loop -- Witness remote execution and cleanup serially before releasing the one foreground permit. */
+export const verifyRemoteCleanup = async ({
+  evidence,
+  failure,
+  fixture,
+  observed,
+  persist,
+}) => {
+  const diagnostic = remoteDiagnostic(evidence);
+  let cleanupFailure;
+  let cleanupFailureKind = "reader_cleanup_unverified";
+  let remaining;
+  try {
+    assert.ok(
+      diagnostic.backend_gone,
+      "reader cleanup must be independently witnessed before remote observation"
+    );
+    cleanupFailureKind = "diagnostic_invalid";
+    assert.ok(
+      [
+        diagnostic.query_outcome !== "unavailable",
+        [true, false].includes(evidence.cancelled),
+        evidence.cancelled === diagnostic.cancelled,
+      ].every(Boolean)
+    );
+    assert.equal(observed.length, 1);
+    assert.match(observed[0]?.query_id, /^.+$/u);
+    const cleanupDeadline = Date.now() + 10_000;
+    cleanupFailureKind = "remote_observation_failed";
+    do {
+      const sample = await fixture.observe();
+      assert.ok(Array.isArray(sample?.data));
+      for (const row of sample.data) {
+        assert.match(row?.query_id, /^.+$/u);
+      }
+      remaining = sample.data.filter(
+        (row) => row.query_id === observed[0].query_id
+      );
+      if (!remaining.length) {
+        break;
+      }
+      await delay(20);
+    } while (Date.now() < cleanupDeadline);
+    cleanupFailureKind = "remote_query_remains";
+    assert.equal(
+      remaining.length,
+      0,
+      "remote query remains; foreground permit must not release successfully"
+    );
+  } catch (error) {
+    cleanupFailure = error;
+  }
+  const result = {
+    ...diagnostic,
+    cleanup_failure: cleanupFailure ? cleanupFailureKind : null,
+    permit_released_after_cleanup:
+      !failure && !cleanupFailure && diagnostic.cancelled,
+    remote_cleanup_verified: !cleanupFailure && remaining?.length === 0,
+    remote_observed: observed,
+    remote_remaining: remaining?.length ?? null,
+  };
+  try {
+    await persist({ kind: "guard_cleanup", ...result });
+  } catch (error) {
+    cleanupFailure ??= error;
+  }
+  if (failure) {
+    throw failure;
+  }
+  if (cleanupFailure) {
+    throw cleanupFailure;
+  }
+  assert.ok(result.cancelled && result.backend_gone);
+  return result;
+};
 const remoteGuardCheck = async (context, env, foreground, persist, clients) => {
   await runProcess({
     args: [
@@ -243,34 +338,19 @@ const remoteGuardCheck = async (context, env, foreground, persist, clients) => {
       assert.ok(controller.signal.aborted);
       await writeFile(gate, "guard stopped admission\n");
       await execution;
-      if (state.failure) {
-        throw state.failure;
+      let evidence;
+      try {
+        evidence = JSON.parse(await readFile(evidencePath, "utf-8"));
+      } catch (error) {
+        state.failure ??= error;
       }
-      const evidence = JSON.parse(await readFile(evidencePath, "utf-8"));
-      assert.ok(evidence.cancelled && evidence.backend_gone);
-      const cleanupDeadline = Date.now() + 10_000;
-      let remaining;
-      do {
-        const sample = await fixture.observe();
-        remaining = sample.data;
-        if (!remaining.length) {
-          break;
-        }
-        await delay(20);
-      } while (Date.now() < cleanupDeadline);
-      assert.equal(
-        remaining.length,
-        0,
-        "remote query remains; foreground permit must not release successfully"
-      );
-      const result = {
-        ...evidence,
-        permit_released_after_cleanup: true,
-        remote_cleanup_verified: true,
-        remote_observed: observed,
-      };
-      await persist({ kind: "guard_cleanup", ...result });
-      return result;
+      return await verifyRemoteCleanup({
+        evidence,
+        failure: state.failure,
+        fixture,
+        observed,
+        persist,
+      });
     } finally {
       controller.abort();
       await execution;
