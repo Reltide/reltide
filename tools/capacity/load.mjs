@@ -361,6 +361,22 @@ const phaseOperations = (clients, result, stop, emit, permit, admitted) => ({
 });
 // Reuse clients across phases, or share clients.schedule when wrapping adapters.
 const loadSchedules = new WeakMap();
+const bindRunStop = (schedule, stop) => {
+  if (stop.aborted) {
+    schedule.admission.abort(stop.reason);
+  } else if (!schedule.admission.signal.aborted && !schedule.stops.has(stop)) {
+    // The schedule is the run lifecycle, including wrapped later phases.
+    schedule.stops.add(stop);
+    stop.addEventListener(
+      "abort",
+      () => schedule.admission.abort(stop.reason),
+      {
+        once: true,
+        signal: schedule.admission.signal,
+      }
+    );
+  }
+};
 /** Bounded per-lane in-flight work; delayed requests are never caught up in a burst. */
 export const runLoad = async (phase, clients, stop) => {
   assert.ok(Number.isFinite(phase.duration_ms) && phase.duration_ms > 0);
@@ -381,10 +397,12 @@ export const runLoad = async (phase, clients, stop) => {
         workflow: 0,
       },
       permit: clients.foreground ?? createForegroundPermit(),
+      stops: new WeakSet(),
     });
   }
   const schedule = loadSchedules.get(scheduleKey);
   const { next, permit } = schedule;
+  bindRunStop(schedule, stop);
   const admission = AbortSignal.any([stop, schedule.admission.signal]);
   const fail = (error) => {
     schedule.failure ??= error;

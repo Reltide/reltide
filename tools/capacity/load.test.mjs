@@ -48,6 +48,67 @@ const collect = async () => {
   );
   return { batches, counts };
 };
+test.each(["original", "fresh"])(
+  "review run cancellation stays closed with %s phase signal and drains accepted work",
+  async (signalKind) => {
+    const stop = new AbortController();
+    const time = clock();
+    const accepted = Promise.withResolvers();
+    const complete = Promise.withResolvers();
+    const events = [];
+    const clients = {
+      ...time,
+      analytics: () => ({}),
+      emit: (event) => events.push(event),
+      http: () => ({}),
+      requests: { api: ["p"], app: ["a"], docs: ["d"], web: ["w"] },
+      schedule: {},
+      search: () => ({}),
+      telemetry: async () => {
+        accepted.resolve();
+        await complete.promise;
+        return { accepted: 10 };
+      },
+      workflow: () => ({}),
+    };
+    let drained = false;
+    const running = runLoad(
+      { duration_ms: 1000, http_rps: 1, name: "first" },
+      clients,
+      stop.signal
+    ).then((result) => {
+      drained = true;
+      return result;
+    });
+    await accepted.promise;
+    stop.abort();
+    await immediate();
+    assert.equal(drained, false);
+    complete.resolve();
+    const first = await running;
+    assert.equal(first.telemetry_accepted, 10);
+    assert.ok(
+      events.some(
+        (event) => event.kind === "telemetry" && event.outcome === "completed"
+      )
+    );
+    time.sleep(20_000);
+    const count = events.length;
+    const result = await runLoad(
+      { duration_ms: 1000, http_rps: 1, name: "second" },
+      { ...clients },
+      signalKind === "original" ? stop.signal : new AbortController().signal
+    );
+    assert.equal(events.length, count);
+    assert.equal(
+      result.http +
+        result.telemetry_accepted +
+        result.search +
+        result.workflows,
+      0
+    );
+  }
+);
 test("seed_is_repeatable_and_bounded", async () => {
   const a = await collect();
   assert.deepEqual(a, await collect());

@@ -554,23 +554,39 @@ const workloadMetrics = (s, e, metrics) => {
 };
 const producerCounters = (s, e) => {
   let previous;
-  for (const event of list(e.events).filter((v) =>
-    v.kind?.startsWith("collector_")
-  )) {
+  for (const event of list(e.events)) {
+    s.need(string(event.kind), "event kind missing or malformed");
+    if (!string(event.kind) || !event.kind.startsWith("collector_")) {
+      continue;
+    }
     if (!string(event.metrics)) {
       continue;
     }
     const current = new Map();
     for (const line of event.metrics.split("\n")) {
+      const counter = /^\s*(?<name>otelcol_[a-zA-Z0-9_]+)/u.exec(line)?.groups
+        .name;
+      if (!counter || !/accepted|refused|dropped|failed|sent/u.test(counter)) {
+        continue;
+      }
       const match =
-        /^(?<name>otelcol_[a-z_]+)(?<labels>\{[^}]*\})? (?<raw>\d+(?:\.\d+)?)(?: .*|)$/u.exec(
+        /^\s*(?<name>otelcol_[a-zA-Z0-9_]+)(?<labels>\{[^}]*\})?[ \t]+(?<raw>\S+)(?:[ \t]+[+-]?\d+)?[ \t]*$/u.exec(
           line
         );
+      s.need(Boolean(match), "collector counter malformed");
       if (!match) {
         continue;
       }
       const { name, labels = "", raw } = match.groups;
       const value = Number(raw);
+      const valid =
+        /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/u.test(raw) &&
+        finite(value) &&
+        value >= 0;
+      s.need(valid, "collector counter malformed or nonfinite");
+      if (!valid) {
+        continue;
+      }
       if (/refused|dropped|failed/u.test(name)) {
         s.fail(value > 0, "collector dropped, refused or failed");
       }
@@ -746,6 +762,26 @@ const foregroundCoverage = (s, e, metrics) => {
         record(v.analytics)
     );
     const count = recurringPhase(s, p, rows);
+    for (const row of rows) {
+      const paired = [row.search.elapsed_ms, row.analytics.elapsed_ms];
+      const elapsed = duration(row.accepted_at, row.completed_at);
+      s.need(
+        paired.every(finite) && finite(elapsed),
+        "paired foreground timing missing or nonfinite"
+      );
+      s.fail(
+        paired.some((value) => Number.isFinite(value) && value < 0),
+        "negative foreground timing"
+      );
+      // ISO timestamps have millisecond precision; the enclosing interval can
+      // understate monotonic durations by less than one millisecond.
+      s.fail(
+        paired.every((value) => finite(value) && value >= 0) &&
+          finite(elapsed) &&
+          paired[0] + paired[1] > elapsed + 1,
+        "serial foreground timings exceed enclosing interval"
+      );
+    }
     const search = summary(rows.map((v) => v.search.elapsed_ms));
     const foreign = summary(rows.map((v) => v.analytics.elapsed_ms));
     s.fail(
@@ -1433,6 +1469,13 @@ const retentionEvidence = (s, e, metrics) => {
   ordinaryRetention(s, e, metrics);
   required(s, e, ["retention"]);
 };
+const lsn = (value) => {
+  if (!string(value) || !/^[\dA-Fa-f]{1,8}\/[\dA-Fa-f]{1,8}$/u.test(value)) {
+    return;
+  }
+  const [high, low] = value.split("/").map((part) => BigInt(`0x${part}`));
+  return high * 4_294_967_296n + low;
+};
 const validReceipt = (r) =>
   string(r.server_version) &&
   /^\d+(?:\.\d+)*$/u.test(r.server_version) &&
@@ -1441,7 +1484,7 @@ const validReceipt = (r) =>
   r.timeline > 0 &&
   runId(r.base_id) &&
   list(r.wal_range).length === 2 &&
-  r.wal_range.every((v) => /^[\dA-F]+\/[\dA-F]+$/u.test(v)) &&
+  r.wal_range.every((v) => lsn(v) !== undefined) &&
   hash(r.encrypted_sha256) &&
   integer(r.bytes) &&
   r.bytes > 0 &&
@@ -1451,6 +1494,11 @@ const validReceipt = (r) =>
 const backupReceipt = (s, e, r, kind, metrics) => {
   s.fail(r.run_id !== e.run_id, "backup run mismatch");
   s.need(validReceipt(r), "backup receipt incomplete");
+  const [start, end] = list(r.wal_range).map(lsn);
+  s.fail(
+    start !== undefined && end !== undefined && start > end,
+    "backup WAL bounds reversed"
+  );
   s.fail(r.bytes > 256 * mib, "base archive above 256 MiB");
   s.fail(r.download_verified === false, "backup download verification failed");
   s.need(
@@ -1697,6 +1745,22 @@ const artifactConsistency = (s, e) => {
     );
   }
 };
+const artifactIdentities = (s, e) => {
+  for (const [name, v] of [
+    ["manifest", e.manifest],
+    ["load_manifest", e.load_manifest],
+    ["integration", e.integration],
+  ]) {
+    if (name !== "manifest" && v === undefined) {
+      continue;
+    }
+    s.need(runId(v?.run_id), "artifact run identity missing or malformed");
+    s.fail(
+      runId(v?.run_id) && v.run_id !== e.run_id,
+      "mixed artifact run identities"
+    );
+  }
+};
 const evaluate = (input = {}) => {
   const e = record(input) ? { ...input } : {};
   const arrays = [
@@ -1730,11 +1794,7 @@ const evaluate = (input = {}) => {
     !e.incomplete && !malformed,
     "input artifact missing or malformed"
   );
-  for (const v of [e.manifest, e.load_manifest, e.integration]) {
-    if (v?.run_id !== undefined) {
-      integrity.fail(v.run_id !== e.run_id, "mixed artifact run identities");
-    }
-  }
+  artifactIdentities(integrity, e);
   const ordered = list(e.events).toSorted((a, b) => a.sequence - b.sequence);
   metrics.event_order = {
     count: ordered.length,

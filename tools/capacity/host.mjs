@@ -446,6 +446,31 @@ const existingService = (guest, expected) =>
         service.running
     )
   );
+const preflightClock = (guest, now) => {
+  const uncertainty = guest?.clock_uncertainty_ms ?? 0;
+  const clockValid =
+    Number.isFinite(guest?.clock_offset_ms) &&
+    nonnegative(uncertainty) &&
+    Math.abs(guest.clock_offset_ms) + uncertainty <= 1000;
+  const fresh = (time) => {
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Validate timestamp evidence at the public preflight boundary before date coercion.
+    if (typeof time !== "string") {
+      return false;
+    }
+    const age = now - (Date.parse(time) - guest?.clock_offset_ms);
+    return (
+      clockValid &&
+      Number.isFinite(age) &&
+      age - uncertainty >= 0 &&
+      age + uncertainty <= 3000
+    );
+  };
+  return [
+    [clockValid, "missing or excessive clock offset"],
+    [fresh(guest?.utc), "stale, future or missing guest timestamp"],
+    [fresh(guest?.sample?.utc), "stale, future or missing sample timestamp"],
+  ];
+};
 /** A reviewed baseline supplies exact proxy, Sentinel and smoke IDs/images.
  * Absent MongoDB is recorded before deployment; unhealthy MongoDB blocks. */
 export const preflight = (
@@ -456,12 +481,7 @@ export const preflight = (
 ) => {
   const checks = [
     ...guestIdentity(guest),
-    [
-      Number.isFinite(guest?.clock_offset_ms) &&
-        Math.abs(guest.clock_offset_ms) + (guest.clock_uncertainty_ms ?? 0) <=
-          1000,
-      "missing or excessive clock offset",
-    ],
+    ...preflightClock(guest, now),
     [
       ["healthy", "absent"].includes(guest?.mongo_health),
       "MongoDB health unavailable or unhealthy",

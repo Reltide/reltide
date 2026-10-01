@@ -147,6 +147,49 @@ const manifest = {
 const fixturePreflight = (value, host, stack) =>
   preflight(value, host, stack, { now: Date.parse(utc) });
 
+test.each([
+  ["stale guest", "guest", "2020-01-01T00:00:00.000Z"],
+  ["stale sample", "sample", "2020-01-01T00:00:00.000Z"],
+  ["future guest", "guest", "2026-09-30T10:00:00.001Z"],
+  ["future sample", "sample", "2026-09-30T10:00:00.001Z"],
+  ["missing guest", "guest", undefined],
+  ["missing sample", "sample", undefined],
+  ["invalid guest", "guest", "invalid"],
+  ["invalid sample", "sample", "invalid"],
+])("review preflight rejects %s", (_name, field, time) => {
+  const host = structuredClone(guest);
+  if (field === "guest") {
+    host.utc = time;
+  } else {
+    host.sample.utc = time;
+  }
+  assert.ok(fixturePreflight(inventory, host, manifest).length > 0);
+});
+test.each([
+  ["fresh", 0, 0, 0, true],
+  ["three second boundary", 0, 0, -3000, true],
+  ["expired", 0, 0, -3001, false],
+  ["bounded positive correction", 800, 100, 700, true],
+  ["bounded negative correction", -800, 100, -900, true],
+  ["uncertainty exceeds freshness", 800, 100, -2201, false],
+  ["uncertain future", 800, 100, 750, false],
+  ["excessive offset", 1001, 0, 1001, false],
+  ["invalid uncertainty", 0, -1, 0, false],
+])(
+  "review preflight clock %s",
+  (_name, offset, uncertainty, delta, accepted) => {
+    const host = structuredClone(guest);
+    host.clock_offset_ms = offset;
+    host.clock_uncertainty_ms = uncertainty;
+    host.utc = new Date(Date.parse(utc) + delta).toISOString();
+    host.sample.utc = host.utc;
+    assert.equal(
+      fixturePreflight(inventory, host, manifest).length === 0,
+      accepted
+    );
+  }
+);
+
 test("preflight verifies protected purchased staging even when replacement stock is unavailable", () => {
   assert.deepEqual(fixturePreflight(inventory, guest, manifest), []);
 });

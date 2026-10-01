@@ -514,6 +514,114 @@ const fixture = () => {
     schema_version: 1,
   };
 };
+// These cases catch silently skipped counter evidence and preserve proven failures.
+test.each([
+  ["decimal", "1000000", "FAIL"],
+  ["exponent", "1e6", "FAIL"],
+  ["signed exponent with whitespace", "\t+1.0E+6\t", "FAIL"],
+  ["positive infinity", "+Inf", "BLOCKED"],
+  ["negative infinity", "-Inf", "BLOCKED"],
+  ["not a number", "NaN", "BLOCKED"],
+  ["malformed", "1e", "BLOCKED"],
+  ["negative counter", "-1", "BLOCKED"],
+  ["zero exponent", "0e0", "PASS"],
+  ["zero decimal", ".0", "PASS"],
+])("review counter %s", (_name, value, expected) => {
+  const e = fixture();
+  e.events.push({
+    kind: "collector_after",
+    metrics: `otelcol_exporter_send_failed_spans_total ${value}`,
+    run_id: id,
+    sequence: e.events.length + 1,
+  });
+  assert.equal(evaluateRun(e).combined, expected);
+});
+test("review counter reset across exponent notation fails", () => {
+  const e = fixture();
+  for (const value of ["1e6", "999999"]) {
+    e.events.push({
+      kind: "collector_after",
+      metrics: `otelcol_receiver_accepted_spans_total ${value}`,
+      run_id: id,
+      sequence: e.events.length + 1,
+    });
+  }
+  assert.equal(evaluateRun(e).combined, "FAIL");
+});
+test.each([
+  ["alone", false, "BLOCKED"],
+  ["before proven failure", true, "FAIL"],
+])("review malformed event kind %s", (_name, failed, expected) => {
+  const e = fixture();
+  e.events.push({ kind: 123, run_id: id, sequence: e.events.length + 1 });
+  if (failed) {
+    e.events.push({
+      kind: "collector_after",
+      metrics: "otelcol_exporter_send_failed_spans_total 1000000",
+      run_id: id,
+      sequence: e.events.length + 1,
+    });
+  }
+  const result = createReport(e);
+  assert.equal(result.verdicts.combined, expected);
+  assert.ok(
+    result.reasons.capacity.some((reason) => reason.status === "BLOCKED")
+  );
+});
+test.each([
+  ["manifest", undefined, "BLOCKED"],
+  ["manifest", 123, "BLOCKED"],
+  ["manifest", "INVALID", "BLOCKED"],
+  ["manifest", "other-run", "FAIL"],
+  ["integration", undefined, "BLOCKED"],
+  ["integration", 123, "BLOCKED"],
+  ["integration", "INVALID", "BLOCKED"],
+  ["integration", "other-run", "FAIL"],
+  ["load_manifest", undefined, "BLOCKED"],
+  ["load_manifest", "other-run", "FAIL"],
+  ["integration", id, "PASS"],
+])("review artifact %s identity %s", (artifact, run_id, expected) => {
+  const e = fixture();
+  e[artifact] ??= {};
+  e[artifact].run_id = run_id;
+  assert.equal(evaluateRun(e).combined, expected);
+});
+test.each([
+  ["serial contradiction", 2000, 2000, 100, "FAIL"],
+  ["missing search", undefined, 2000, 4000, "BLOCKED"],
+  ["missing analytics", 2000, undefined, 4000, "BLOCKED"],
+  ["negative search", -1, 2000, 4000, "FAIL"],
+  ["nonfinite analytics", 2000, Infinity, 4000, "BLOCKED"],
+  ["paired durations", 2000, 2000, 4000, "PASS"],
+  ["millisecond rounding", 2000.4, 1999.4, 3999, "PASS"],
+  ["beyond rounding", 2000, 2000, 3998, "FAIL"],
+])(
+  "review foreground timing %s",
+  (_name, search, analyticsMs, elapsed, expected) => {
+    const e = fixture();
+    const row = e.events.find((event) => event.kind === "foreground");
+    row.search.elapsed_ms = search;
+    row.analytics.elapsed_ms = analyticsMs;
+    row.completed_at = new Date(
+      Date.parse(row.accepted_at) + elapsed
+    ).toISOString();
+    assert.equal(evaluateRun(e).combined, expected);
+  }
+);
+test.each([
+  ["reversed", ["0/200", "0/100"], "FAIL"],
+  ["cross-word reversed", ["1/0", "0/FFFFFFFF"], "FAIL"],
+  ["cross-word ordered", ["0/FFFFFFFF", "1/0"], "PASS"],
+  ["equal", ["1/0", "1/0"], "PASS"],
+  ["overflow high", ["100000000/0", "100000001/0"], "BLOCKED"],
+  ["overflow low", ["0/0", "0/100000000"], "BLOCKED"],
+  ["malformed", ["0/G", "1/0"], "BLOCKED"],
+  ["missing", undefined, "BLOCKED"],
+])("review WAL range %s", (_name, range, expected) => {
+  const e = fixture();
+  e.backups[0].wal_range = range;
+  assert.equal(evaluateRun(e).combined, expected);
+});
 test.each([
   ["complete unit evidence passes", "complete", "PASS"],
   ["missing future restore evidence remains blocked", "restores", "BLOCKED"],
