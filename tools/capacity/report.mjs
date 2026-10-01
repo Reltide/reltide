@@ -45,6 +45,7 @@ const utc = (s) =>
   /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/u.test(s) &&
   Number.isFinite(Date.parse(s));
 const hash = (s) => string(s) && /^(?:sha256:)?[a-f0-9]{64}$/u.test(s);
+const timestamp = (value) => (utc(value) ? Date.parse(value) : undefined);
 const runId = (s) => string(s) && /^[a-z0-9-]{1,64}$/u.test(s);
 const list = (v) => (Array.isArray(v) ? v : []);
 const records = (s, values, reason) => {
@@ -131,15 +132,15 @@ const induced = (e, service, time) =>
   );
 const sequenceGap = (current, previous) =>
   integer(current) && integer(previous) && current !== previous + 1;
+const sequenceOutside = (sequence, count) =>
+  Number.isFinite(sequence) && (sequence < 1 || sequence > count);
 const continuity = (s, rows, id, { logical = false } = {}) => {
   const partial = logical && rows.some((v) => !integer(v?.sequence));
   if (partial) {
     const known = rows.map((v) => v?.sequence).filter(integer);
-    // Unknown sequence values may fill gaps, but cannot repair duplicates or
-    // a sequence outside the range of this complete set of observed records.
+    // Unknown sequence values may fill gaps, but cannot repair duplicates.
     s.fail(
-      new Set(known).size !== known.length ||
-        known.some((sequence) => sequence < 1 || sequence > rows.length),
+      new Set(known).size !== known.length,
       "evidence sequence gap or reset"
     );
   }
@@ -157,6 +158,10 @@ const continuity = (s, rows, id, { logical = false } = {}) => {
       "mixed run identities"
     );
     s.need(integer(row?.sequence), "missing evidence sequence");
+    s.fail(
+      sequenceOutside(row?.sequence, rows.length),
+      "evidence sequence outside observed range"
+    );
     if (i && !partial) {
       s.fail(
         sequenceGap(row?.sequence, rows[i - 1]?.sequence),
@@ -459,6 +464,11 @@ const phaseEvidence = (s, e) => {
     "initializer",
   ]);
 };
+const httpFailure = (v) =>
+  (integer(v.status) && v.status >= 500) ||
+  v.outcome === "failed" ||
+  v.outcome === "timeout" ||
+  v.timeout === true;
 const httpMetrics = (s, e, metrics) => {
   metrics.http = {};
   metrics.http_phases = {};
@@ -480,6 +490,7 @@ const httpMetrics = (s, e, metrics) => {
           v.outcome === "completed" &&
           !exclusions.some(
             ([start, end]) =>
+              utc(v.completed_at) &&
               Date.parse(v.completed_at) >= start &&
               Date.parse(v.completed_at) <= end
           )
@@ -508,13 +519,8 @@ const httpMetrics = (s, e, metrics) => {
     if (v.kind !== "http") {
       continue;
     }
-    const failed =
-      v.status >= 500 ||
-      v.outcome === "failed" ||
-      v.outcome === "timeout" ||
-      v.timeout === true;
     s.fail(
-      failed && !induced(e, v.service, v.completed_at),
+      httpFailure(v) && !induced(e, v.service, v.completed_at),
       "unexpected HTTP failure"
     );
     s.need(
@@ -677,14 +683,14 @@ const producerCounters = (s, e) => {
   }
 };
 const phaseCoverage = (s, p, rows, count, rate) => {
-  const start = Date.parse(p.started_at);
-  const end = Date.parse(p.completed_at);
+  const start = timestamp(p.started_at);
+  const end = timestamp(p.completed_at);
   const bins = new Map();
   let total = 0;
   const admissions = [];
   for (const v of rows) {
-    const admitted = Date.parse(v.accepted_at);
-    const completed = Date.parse(v.completed_at);
+    const admitted = timestamp(v.accepted_at);
+    const completed = timestamp(v.completed_at);
     const timed = utc(v.accepted_at) && utc(v.completed_at);
     s.need(timed, "phase observation UTC missing");
     const inside =

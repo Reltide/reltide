@@ -794,6 +794,123 @@ test("review sequence CLI discards reports after a write failure", async () => {
   }
 });
 
+test.each(
+  ["events", "host_samples", "collector"].flatMap((source) =>
+    [-1, -0.5, Number.MAX_VALUE].flatMap((value) => [
+      [source, value, "alone", false],
+      [source, value, "with unknown sequence", true],
+    ])
+  )
+)(
+  "review sequence numeric range %s %s %s",
+  (source, value, _scenario, unknown) => {
+    const e = fixture();
+    e[source][0].sequence = value;
+    if (unknown) {
+      e[source][1].sequence = malformedScalar;
+    }
+    const report = createReport(jsonInput(e));
+    assert.equal(report.verdicts.combined, "FAIL");
+    assert.ok(
+      report.reasons.capacity.some(
+        (v) => v.status === "FAIL" && v.reason.includes("sequence")
+      )
+    );
+  }
+);
+test.each([false, true])(
+  "review sequence numeric range preserves zero with unknown=%s",
+  (unknown) => {
+    const e = fixture();
+    e.events[0].sequence = 0;
+    if (unknown) {
+      e.events[1].sequence = malformedScalar;
+    }
+    assert.equal(createReport(jsonInput(e)).verdicts.combined, "FAIL");
+  }
+);
+test.each(["events", "host_samples", "collector"])(
+  "review sequence numeric range does not coerce a string in %s",
+  (source) => {
+    const e = fixture();
+    e[source][0].sequence = "-1";
+    assert.equal(createReport(jsonInput(e)).verdicts.combined, "BLOCKED");
+  }
+);
+test.each(
+  [
+    [
+      "status object",
+      (e) => {
+        e.events.find((v) => v.kind === "http").status = malformedScalar;
+      },
+    ],
+    [
+      "status array",
+      (e) => {
+        e.events.find((v) => v.kind === "http").status = [malformedScalar];
+      },
+    ],
+    [
+      "status string",
+      (e) => {
+        e.events.find((v) => v.kind === "http").status = "503";
+      },
+    ],
+    [
+      "completion date during declared window",
+      (e) => {
+        e.manifest.induced_windows = [
+          {
+            completed_at: at(3_001_000),
+            declared_at: at(0),
+            kind: "restart",
+            ownership_sha256: sha,
+            ownership_verified: true,
+            recovery_check: check(),
+            run_id: id,
+            service: "app",
+            started_at: at(3_000_000),
+          },
+        ];
+        e.events.find((v) => v.kind === "http").completed_at = malformedScalar;
+      },
+    ],
+  ].flatMap(([name, change]) => [
+    [name, "incomplete only", change, false, "BLOCKED"],
+    [name, "later HTTP failure", change, true, "FAIL"],
+  ])
+)(
+  "review HTTP scalar %s with %s",
+  (_name, _scenario, change, failed, expected) => {
+    const e = fixture();
+    change(e);
+    if (failed) {
+      const [, http] = e.events.filter((v) => v.kind === "http");
+      http.status = 503;
+      // Keep outcome completed to test the status guard independently of the
+      // generic operation-failure guard and place it outside the induced window.
+      http.accepted_at = at(3_002_000);
+      http.completed_at = at(3_002_000);
+    }
+    const report = createReport(jsonInput(e));
+    assert.equal(report.verdicts.capacity, expected);
+    assert.equal(report.verdicts.combined, expected);
+    assert.ok(
+      !report.reasons.capacity.some(
+        (v) => v.reason === "malformed component evidence"
+      )
+    );
+    if (failed) {
+      assert.ok(
+        report.reasons.capacity.some(
+          (v) => v.status === "FAIL" && v.reason === "unexpected HTTP failure"
+        )
+      );
+    }
+  }
+);
+
 // These cases catch silently skipped counter evidence and preserve proven failures.
 test.each([
   ["decimal", "1000000", "FAIL"],
