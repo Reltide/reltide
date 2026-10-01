@@ -808,7 +808,7 @@ test.each([
   ["complete evidence", 0],
   ["measured HTTP failure", 1],
   ["missing restores with JSON/CSV/Markdown reports", 2],
-  ["malformed events with redacted output", 2],
+  ["malformed events with redacted output", 1],
 ])("CLI writes reports: %s", async (scenario, expected) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "capacity-report-"));
   const stale = "STALE_REPORT_FROM_PREVIOUS_INVOCATION";
@@ -1001,6 +1001,215 @@ test("endpoint distributions do not pool a slow endpoint into fast bulk requests
   assert.equal(report.metrics.http.app_1.p95_ms, 100);
 });
 
+test.each(
+  [
+    ["events", "load-events.ndjson"],
+    ["host_samples", "host-samples.ndjson"],
+  ].flatMap(([key, file]) =>
+    [
+      "complete shorter prefix",
+      "empty stream",
+      "malformed tail",
+      "truncated tail",
+    ].map((name) => [key, name, file])
+  )
+)(
+  "report stream %s with %s retains a known tail failure",
+  async (key, name, file) => {
+    const e = fixture();
+    assert.equal(evaluateRun(e).combined, "PASS");
+    const prefix = e[key].map((v) => JSON.stringify(v)).join("\n");
+    if (key === "events") {
+      assert.equal(e.events.length, 89_131);
+      const end = e.manifest.phases.at(-1).completed_at;
+      e.events.push({
+        accepted_at: end,
+        completed_at: end,
+        kind: "http",
+        outcome: "failed",
+        phase: "final",
+        run_id: id,
+        sequence: e.events.length + 1,
+        status: 503,
+        url: e.manifest.requests.app[0],
+      });
+    } else {
+      const last = e.host_samples.at(-1);
+      e.host_samples.push({
+        ...last,
+        monotonic_ms: last.monotonic_ms + 1000,
+        root_used_ratio: 0.8,
+        sequence: last.sequence + 1,
+        utc: at(last.monotonic_ms + 1000),
+      });
+    }
+    assert.equal(evaluateRun(e).capacity, "FAIL");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "capacity-tail-"));
+    try {
+      await writeFile(path.join(dir, "evidence.json"), JSON.stringify(e));
+      const raw = {
+        "complete shorter prefix": `${prefix}\n`,
+        "empty stream": "\n",
+        "malformed tail": `${prefix}\n{malformed}\n`,
+        "truncated tail": `${prefix}\n{"run_id":`,
+      }[name];
+      const count = name === "empty stream" ? 0 : e[key].length - 1;
+      await writeFile(path.join(dir, file), raw);
+      const parsed = await readEvidence(dir);
+      const report = createReport(parsed);
+      assert.equal(report.verdicts.capacity, "FAIL");
+      assert.equal(parsed.artifact_conflict, true);
+      assert.equal(
+        parsed.incomplete,
+        name === "malformed tail" || name === "truncated tail"
+      );
+      assert.equal(parsed[key].length, count);
+      assert.deepEqual(parsed[key], e[key].slice(0, count));
+      assert.ok(
+        report.reasons.capacity.some(
+          (v) =>
+            v.status === "FAIL" && v.reason.includes("contradicts envelope")
+        )
+      );
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  }
+);
+test.each(
+  [
+    ["events", "load-events.ndjson"],
+    ["host_samples", "host-samples.ndjson"],
+  ].flatMap(([key, file]) =>
+    ["full", "prefix", "empty"].map((name) => [key, name, file])
+  )
+)(
+  "report stream %s accepts a matching %s envelope",
+  async (key, name, file) => {
+    const e = fixture();
+    const rows = e[key];
+    const dir = await mkdtemp(path.join(os.tmpdir(), "capacity-growth-"));
+    try {
+      await writeFile(
+        path.join(dir, file),
+        `${rows.map((v) => JSON.stringify(v)).join("\n")}\n`
+      );
+      const count = { empty: 0, full: rows.length, prefix: rows.length - 1 }[
+        name
+      ];
+      e[key] = rows.slice(0, count);
+      await writeFile(path.join(dir, "evidence.json"), JSON.stringify(e));
+      const parsed = await readEvidence(dir);
+      assert.equal(evaluateRun(parsed).combined, "PASS");
+      assert.equal(parsed.artifact_conflict, false);
+      assert.deepEqual(parsed[key], rows);
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  }
+);
+test.each(["typo-application", "application", undefined])(
+  "report receipt %s retains independently established failures",
+  (kind) => {
+    const e = fixture();
+    assert.equal(evaluateRun(e).backup, "PASS");
+    e.backups.push({
+      ...structuredClone(e.backups[0]),
+      bytes: 314_572_800,
+      download_verified: false,
+      encrypted_sha256: "c".repeat(64),
+      kind,
+      run_id: "other-run",
+    });
+    const report = createReport(e);
+    assert.equal(report.verdicts.backup, "FAIL");
+    for (const reason of [
+      "backup run mismatch",
+      "base archive above 256 MiB",
+      "backup download verification failed",
+    ]) {
+      assert.ok(
+        report.reasons.backup.some(
+          (v) => v.status === "FAIL" && v.reason === reason
+        )
+      );
+    }
+  }
+);
+test.each(
+  ["typo-application", undefined].flatMap((kind) =>
+    [
+      ["valid generic fields", {}, "BLOCKED"],
+      ["missing identity", { run_id: undefined }, "BLOCKED"],
+      ["malformed identity", { run_id: "INVALID" }, "BLOCKED"],
+      ["mixed identity", { run_id: "other-run" }, "FAIL"],
+      ["failed download", { download_verified: false }, "FAIL"],
+      ["oversized archive", { bytes: 314_572_800 }, "FAIL"],
+      ["reversed WAL range", { wal_range: ["0/200", "0/100"] }, "FAIL"],
+      [
+        "class A budget",
+        { operations_reserved: { class_a: 5001, class_b: 1 } },
+        "FAIL",
+      ],
+      [
+        "class B budget",
+        { operations_reserved: { class_a: 1, class_b: 20_001 } },
+        "FAIL",
+      ],
+      ["storage budget", { bytes: 1_000_000_001 }, "FAIL"],
+    ].map(([name, change, expected]) => [kind, name, change, expected])
+  )
+)(
+  "report receipt %s with %s enforces generic controls",
+  (kind, _name, change, expected) => {
+    const e = fixture();
+    e.backups.push({
+      ...structuredClone(e.backups[0]),
+      encrypted_sha256: "c".repeat(64),
+      extensions: [{ name: "unknown-extension" }],
+      kind,
+      ...change,
+    });
+    const report = createReport(e);
+    assert.equal(report.verdicts.backup, expected);
+    assert.equal(report.verdicts.combined, expected);
+    if (_name === "missing identity" || _name === "malformed identity") {
+      assert.ok(
+        report.reasons.backup.some(
+          (v) =>
+            v.status === "BLOCKED" &&
+            v.reason === "backup run identity missing or malformed"
+        )
+      );
+    }
+    assert.ok(
+      !report.reasons.backup.some((v) => v.reason.includes("extension"))
+    );
+  }
+);
+test("report receipt malformed records cannot hide a later generic failure", () => {
+  const e = fixture();
+  e.backups.push(
+    null,
+    {},
+    { kind: "typo-application", wal_range: null },
+    {
+      ...structuredClone(e.backups[0]),
+      download_verified: false,
+      encrypted_sha256: "c".repeat(64),
+      kind: "typo-application",
+    }
+  );
+  const report = createReport(e);
+  assert.equal(report.verdicts.backup, "FAIL");
+  assert.ok(
+    report.reasons.backup.some(
+      (v) =>
+        v.status === "FAIL" &&
+        v.reason === "backup download verification failed"
+    )
+  );
+});
 test("producer files cannot silently override conflicting envelope evidence", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "capacity-conflict-"));
   try {

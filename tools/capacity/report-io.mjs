@@ -155,8 +155,11 @@ const parseArtifact = async (directory, name, ndjson = false) => {
 };
 const artifactAgrees = (envelope, source) => {
   if (Array.isArray(envelope) && Array.isArray(source)) {
-    return source.every(
-      (v, i) => envelope[i] === undefined || isDeepStrictEqual(v, envelope[i])
+    return (
+      source.length >= envelope.length &&
+      source.every(
+        (v, i) => envelope[i] === undefined || isDeepStrictEqual(v, envelope[i])
+      )
     );
   }
   return isDeepStrictEqual(envelope, source);

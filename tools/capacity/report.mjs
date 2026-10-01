@@ -1492,7 +1492,8 @@ const validReceipt = (r) =>
   integer(r.operations_reserved?.class_a) &&
   integer(r.operations_reserved?.class_b);
 const backupReceipt = (s, e, r, kind, metrics) => {
-  s.fail(r.run_id !== e.run_id, "backup run mismatch");
+  s.need(runId(r.run_id), "backup run identity missing or malformed");
+  s.fail(runId(r.run_id) && r.run_id !== e.run_id, "backup run mismatch");
   s.need(validReceipt(r), "backup receipt incomplete");
   const [start, end] = list(r.wal_range).map(lsn);
   s.fail(
@@ -1505,6 +1506,14 @@ const backupReceipt = (s, e, r, kind, metrics) => {
     r.download_verified === true,
     "external encrypted download verification missing"
   );
+  if (hash(r.encrypted_sha256)) {
+    metrics.receipt_hashes.push(r.encrypted_sha256);
+  }
+  const supported = kind === "application" || kind === "temporal";
+  s.need(supported, "backup kind missing or unsupported");
+  if (!supported) {
+    return;
+  }
   s.need(Array.isArray(r.extensions), "backup extension manifest missing");
   if (Array.isArray(r.extensions)) {
     s.fail(
@@ -1524,9 +1533,6 @@ const backupReceipt = (s, e, r, kind, metrics) => {
       "backup extension image hash missing"
     );
   }
-  if (hash(r.encrypted_sha256)) {
-    metrics.receipt_hashes.push(r.encrypted_sha256);
-  }
 };
 const backupEvidence = (s, e, metrics) => {
   const receipts = list(e.backups);
@@ -1536,12 +1542,12 @@ const backupEvidence = (s, e, metrics) => {
     new Set(hashes).size !== hashes.length,
     "backup ciphertext identities overlap"
   );
+  for (const r of receipts) {
+    backupReceipt(s, e, r, r.kind, metrics);
+  }
   for (const kind of ["application", "temporal"]) {
     const matches = receipts.filter((r) => r.kind === kind);
     s.need(matches.length > 0, `${kind} backup missing`);
-    for (const r of matches) {
-      backupReceipt(s, e, r, kind, metrics);
-    }
   }
   s.fail(
     receipts.reduce((sum, r) => sum + (finite(r.bytes) ? r.bytes : 0), 0) > 1e9,
