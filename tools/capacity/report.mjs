@@ -1479,7 +1479,8 @@ const lsn = (value) => {
 const validReceipt = (r) =>
   string(r.server_version) &&
   /^\d+(?:\.\d+)*$/u.test(r.server_version) &&
-  /^\d+$/u.test(r.system_identifier ?? "") &&
+  string(r.system_identifier) &&
+  /^\d+$/u.test(r.system_identifier) &&
   integer(r.timeline) &&
   r.timeline > 0 &&
   runId(r.base_id) &&
@@ -1500,7 +1501,7 @@ const backupReceipt = (s, e, r, kind, metrics) => {
     start !== undefined && end !== undefined && start > end,
     "backup WAL bounds reversed"
   );
-  s.fail(r.bytes > 256 * mib, "base archive above 256 MiB");
+  s.fail(finite(r.bytes) && r.bytes > 256 * mib, "base archive above 256 MiB");
   s.fail(r.download_verified === false, "backup download verification failed");
   s.need(
     r.download_verified === true,
@@ -1559,7 +1560,11 @@ const backupEvidence = (s, e, metrics) => {
   ]) {
     s.fail(
       receipts.reduce(
-        (sum, r) => sum + (r.operations_reserved?.[key] ?? 0),
+        (sum, r) =>
+          sum +
+          (finite(r.operations_reserved?.[key])
+            ? r.operations_reserved[key]
+            : 0),
         0
       ) > max,
       "backup operation budget exceeded"

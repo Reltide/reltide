@@ -1187,6 +1187,106 @@ test.each(
     );
   }
 );
+test.each(
+  [
+    ["size object", { bytes: { toString: null } }],
+    ["size string", { bytes: "314572800" }],
+    ["system identifier object", { system_identifier: { toString: null } }],
+    [
+      "class A object",
+      { operations_reserved: { class_a: { toString: null }, class_b: 1 } },
+    ],
+    [
+      "class B object",
+      { operations_reserved: { class_a: 1, class_b: { toString: null } } },
+    ],
+    [
+      "class A string",
+      { operations_reserved: { class_a: "5001", class_b: 1 } },
+    ],
+  ].flatMap(([name, change]) =>
+    [
+      ["incomplete only", false, "BLOCKED"],
+      ["later failed download", true, "FAIL"],
+    ].map(([scenario, failedDownload, expected]) => [
+      name,
+      scenario,
+      change,
+      failedDownload,
+      expected,
+    ])
+  )
+)(
+  "report receipt coercion %s with %s preserves failure precedence",
+  (_name, _scenario, change, failedDownload, expected) => {
+    const e = fixture();
+    e.backups.push({
+      ...structuredClone(e.backups[0]),
+      encrypted_sha256: "c".repeat(64),
+      kind: "typo-application",
+      ...change,
+    });
+    if (failedDownload) {
+      e.backups.push({
+        ...structuredClone(e.backups[0]),
+        download_verified: false,
+        encrypted_sha256: "d".repeat(64),
+      });
+    }
+    const serialized = JSON.stringify(e);
+    const report = createReport(JSON.parse(serialized));
+    assert.equal(report.verdicts.backup, expected);
+    assert.equal(report.verdicts.combined, expected);
+    assert.ok(
+      report.reasons.backup.some(
+        (v) =>
+          v.status === "BLOCKED" && v.reason === "backup receipt incomplete"
+      )
+    );
+    assert.ok(
+      !report.reasons.backup.some(
+        (v) => v.reason === "malformed component evidence"
+      )
+    );
+    if (failedDownload) {
+      assert.ok(
+        report.reasons.backup.some(
+          (v) =>
+            v.status === "FAIL" &&
+            v.reason === "backup download verification failed"
+        )
+      );
+    }
+  }
+);
+test("report receipt coercion cannot hide a later operation budget failure", () => {
+  const e = fixture();
+  e.backups.push({
+    ...structuredClone(e.backups[0]),
+    encrypted_sha256: "c".repeat(64),
+    kind: "typo-application",
+    operations_reserved: { class_a: { toString: null }, class_b: 20_001 },
+  });
+  const serialized = JSON.stringify(e);
+  const report = createReport(JSON.parse(serialized));
+  assert.equal(report.verdicts.backup, "FAIL");
+  assert.ok(
+    report.reasons.backup.some(
+      (v) =>
+        v.status === "FAIL" && v.reason === "backup operation budget exceeded"
+    )
+  );
+});
+test.each([
+  ["valid receipt", {}, "PASS"],
+  ["oversized numeric archive", { bytes: 314_572_800 }, "FAIL"],
+  ["failed download", { download_verified: false }, "FAIL"],
+])("report receipt coercion control %s", (_name, change, expected) => {
+  const e = fixture();
+  Object.assign(e.backups[0], change);
+  const serialized = JSON.stringify(e);
+  assert.equal(createReport(JSON.parse(serialized)).verdicts.backup, expected);
+});
 test("report receipt malformed records cannot hide a later generic failure", () => {
   const e = fixture();
   e.backups.push(
