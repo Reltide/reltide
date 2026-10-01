@@ -163,7 +163,7 @@ async fn collect(
     run_id: &str,
     start: Instant,
 ) -> Result<AnalyticsProbeOutput, ProbeError> {
-    let versions=reader.client.query_one("SELECT ch_extension.pgch_version(), extversion::text FROM pg_extension WHERE extname='pg_clickhouse'",&[]).await.map_err(|_| ProbeError::Database)?;
+    let versions=reader.client.query_one("SELECT ch_extension.pgch_version(), extversion::text FROM pg_extension WHERE extname='pg_clickhouse'",&[]).await.map_err(query_error)?;
     let library_version: String = versions.get(0);
     let sql_version: String = versions.get(1);
     let pin: Value = serde_json::from_str(include_str!("../../../infra/capacity/images.lock.json"))
@@ -180,7 +180,7 @@ async fn collect(
             &[&run_id],
         )
         .await
-        .map_err(|_| ProbeError::Database)?
+        .map_err(query_error)?
         .try_get::<_, JsonPlan>(0)
         .map_err(|_| ProbeError::Database)?
         .0;
@@ -193,14 +193,14 @@ async fn collect(
         .client
         .query_one(AGGREGATE, &[&run_id])
         .await
-        .map_err(|_| ProbeError::Database)?;
+        .map_err(query_error)?;
     let rows = u64::try_from(row.get::<_, i64>(0)).map_err(|_| ProbeError::Database)?;
     let min_sequence = u32::try_from(row.get::<_, i32>(1)).map_err(|_| ProbeError::Database)?;
     let max_sequence = u32::try_from(row.get::<_, i32>(2)).map_err(|_| ProbeError::Database)?;
     if (rows, min_sequence, max_sequence) != (10000, 1, 10000) {
         return Err(ProbeError::Validation("analytics fixture mismatch"));
     }
-    let sample=reader.client.query("SELECT run_id,sequence FROM capacity_ch.ledger_sample WHERE run_id=$1 AND sequence BETWEEN 1 AND 10 ORDER BY sequence LIMIT 10",&[&run_id]).await.map_err(|_|ProbeError::Database)?.iter().map(|row|Ok(AnalyticsSample {run_id:row.try_get(0).map_err(|_|ProbeError::Database)?,sequence:u32::try_from(row.try_get::<_,i32>(1).map_err(|_|ProbeError::Database)?).map_err(|_|ProbeError::Database)?})).collect::<Result<Vec<_>,ProbeError>>()?;
+    let sample=reader.client.query("SELECT run_id,sequence FROM capacity_ch.ledger_sample WHERE run_id=$1 AND sequence BETWEEN 1 AND 10 ORDER BY sequence LIMIT 10",&[&run_id]).await.map_err(query_error)?.iter().map(|row|Ok(AnalyticsSample {run_id:row.try_get(0).map_err(|_|ProbeError::Database)?,sequence:u32::try_from(row.try_get::<_,i32>(1).map_err(|_|ProbeError::Database)?).map_err(|_|ProbeError::Database)?})).collect::<Result<Vec<_>,ProbeError>>()?;
     if sample.len() != 10
         || sample
             .iter()
@@ -230,26 +230,61 @@ pub async fn probe_analytics(
     probe_analytics_cancellable(run_id, config, std::future::pending()).await
 }
 async fn controlled<T>(
-    reader: &Reader,
     operation: impl Future<Output = Result<T, ProbeError>>,
     stop: impl Future<Output = ()>,
     budget: Duration,
+    cancel: impl Future<Output = Result<(), ProbeError>>,
 ) -> Result<Option<T>, ProbeError> {
     tokio::pin!(operation);
     tokio::select! {
         result=&mut operation=>result.map(Some),
         ()=stop=>{
-            reader.cancel().await?;
+            cancel.await?;
             // Sending a CancelRequest is not acknowledgement; drain the query before closing.
-            let _=timeout(Duration::from_secs(6),&mut operation).await.map_err(|_|ProbeError::Database)?;
-            Ok(None)
+            match timeout(Duration::from_secs(6), &mut operation).await.map_err(|_| ProbeError::Database)? {
+                Err(ProbeError::QueryCancelled) => Ok(None),
+                Ok(_) => Err(ProbeError::Validation("analytics cancellation unacknowledged")),
+                Err(error) => Err(error),
+            }
         },
         ()=tokio::time::sleep(budget)=>{
-            reader.cancel().await?;
-            let _=timeout(Duration::from_secs(6),&mut operation).await.map_err(|_|ProbeError::Database)?;
+            cancel.await?;
+            match timeout(Duration::from_secs(6), &mut operation).await.map_err(|_| ProbeError::Database)? {
+                Ok(_) | Err(ProbeError::QueryCancelled) => {},
+                Err(error) => return Err(error),
+            }
             Err(ProbeError::Validation("analytics deadline exceeded"))
         }
     }
+}
+fn classify_query_failure(
+    code: Option<&tokio_postgres::error::SqlState>,
+    message: Option<&str>,
+) -> ProbeError {
+    // QUERY_CANCELED also covers statement_timeout. Only the server's explicit
+    // user-request reason witnesses our CancelRequest; unknown/localized reasons fail closed.
+    if code == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED)
+        && message == Some("canceling statement due to user request")
+    {
+        ProbeError::QueryCancelled
+    } else {
+        ProbeError::Database
+    }
+}
+fn query_error(error: tokio_postgres::Error) -> ProbeError {
+    classify_query_failure(
+        error.code(),
+        error
+            .as_db_error()
+            .map(tokio_postgres::error::DbError::message),
+    )
+}
+async fn after_cleanup<T, U>(
+    result: Result<T, ProbeError>,
+    cleanup: impl Future<Output = Result<U, ProbeError>>,
+) -> Result<(T, U), ProbeError> {
+    let evidence = cleanup.await?;
+    Ok((result?, evidence))
 }
 async fn finish_reader(
     reader: Reader,
@@ -297,14 +332,14 @@ pub async fn probe_analytics_cancellable(
     let start = Instant::now();
     let reader = Reader::connect(config).await?;
     let result = controlled(
-        &reader,
         collect(&reader, run_id, start),
         stop,
         Duration::from_secs(10).saturating_sub(start.elapsed()),
+        reader.cancel(),
     )
     .await;
-    finish_reader(reader, config).await?;
-    let mut output = result?.ok_or(ProbeError::Validation(
+    let (result, _) = after_cleanup(result, finish_reader(reader, config)).await?;
+    let mut output = result.ok_or(ProbeError::Validation(
         "analytics cancelled after verified backend cleanup",
     ))?;
     output.elapsed_ms = start.elapsed().as_millis() as u64;
@@ -323,20 +358,20 @@ async fn query_analytics_cancellable(
     let start = Instant::now();
     let reader = Reader::connect(config).await?;
     let result = controlled(
-        &reader,
         async {
             reader
                 .client
                 .query(query, &[&run_id])
                 .await
-                .map_err(|_| ProbeError::Database)
+                .map_err(query_error)
         },
         stop,
         Duration::from_secs(10).saturating_sub(start.elapsed()),
+        reader.cancel(),
     )
     .await;
-    let mut evidence = finish_reader(reader, config).await?;
-    evidence.cancelled = result?.is_none();
+    let (result, mut evidence) = after_cleanup(result, finish_reader(reader, config)).await?;
+    evidence.cancelled = result.is_none();
     Ok(evidence)
 }
 
@@ -373,16 +408,16 @@ mod live_tests {
         let config = config();
         let reader = Reader::connect(&config).await.unwrap();
         let result = controlled(
-            &reader,
             async {
                 reader
                     .client
                     .query("SELECT pg_sleep(30)", &[])
                     .await
-                    .map_err(|_| ProbeError::Database)
+                    .map_err(query_error)
             },
             std::future::pending(),
             Duration::from_millis(100),
+            reader.cancel(),
         )
         .await;
         let evidence = finish_reader(reader, &config).await.unwrap();
@@ -391,6 +426,41 @@ mod live_tests {
             result,
             Err(ProbeError::Validation("analytics deadline exceeded"))
         ));
+    }
+    #[tokio::test]
+    #[ignore = "requires owned local capacity stack and reader DSN"]
+    async fn normal_completion_does_not_claim_cancellation() {
+        let evidence = query_analytics_cancellable(
+            "SELECT $1::text",
+            &run_id(),
+            &config(),
+            std::future::pending(),
+        )
+        .await
+        .unwrap();
+        assert!(!evidence.cancelled && evidence.backend_gone);
+    }
+    #[tokio::test]
+    #[ignore = "requires owned local capacity stack and reader DSN"]
+    async fn statement_timeout_is_failure_after_reader_cleanup() {
+        let config = config();
+        let reader = Reader::connect(&config).await.unwrap();
+        let result = controlled(
+            async {
+                reader
+                    .client
+                    .query("SELECT pg_sleep(30)", &[])
+                    .await
+                    .map_err(query_error)
+            },
+            std::future::pending(),
+            Duration::from_secs(10),
+            reader.cancel(),
+        )
+        .await;
+        let evidence = finish_reader(reader, &config).await.unwrap();
+        assert!(evidence.backend_gone);
+        assert!(matches!(result, Err(ProbeError::Database)));
     }
     #[tokio::test]
     #[ignore = "requires owned local slow fixture plus external remote observation gate"]
@@ -433,6 +503,134 @@ mod live_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    #[tokio::test]
+    async fn requested_cancellation_requires_query_acknowledgement() {
+        let (sent, receive) = tokio::sync::oneshot::channel();
+        let result = controlled(
+            async {
+                receive.await.unwrap();
+                Err::<(), _>(ProbeError::QueryCancelled)
+            },
+            async {},
+            Duration::from_secs(1),
+            async {
+                sent.send(()).unwrap();
+                Ok(())
+            },
+        )
+        .await;
+        assert!(matches!(result, Ok(None)), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn completed_query_after_cancel_dispatch_is_not_acknowledgement() {
+        let (sent, receive) = tokio::sync::oneshot::channel();
+        let result = controlled(
+            async {
+                receive.await.unwrap();
+                Ok(())
+            },
+            async {},
+            Duration::from_secs(1),
+            async {
+                sent.send(()).unwrap();
+                Ok(())
+            },
+        )
+        .await;
+        assert!(
+            matches!(
+                result,
+                Err(ProbeError::Validation(
+                    "analytics cancellation unacknowledged"
+                ))
+            ),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unrelated_query_error_after_cancel_dispatch_is_preserved() {
+        let (sent, receive) = tokio::sync::oneshot::channel();
+        let result = controlled(
+            async {
+                receive.await.unwrap();
+                Err::<(), _>(ProbeError::Database)
+            },
+            async {},
+            Duration::from_secs(1),
+            async {
+                sent.send(()).unwrap();
+                Ok(())
+            },
+        )
+        .await;
+        assert!(matches!(result, Err(ProbeError::Database)), "{result:?}");
+    }
+
+    #[test]
+    fn statement_timeout_is_not_requested_cancellation() {
+        assert!(matches!(
+            classify_query_failure(
+                Some(&tokio_postgres::error::SqlState::QUERY_CANCELED),
+                Some("canceling statement due to statement timeout")
+            ),
+            ProbeError::Database
+        ));
+    }
+
+    #[test]
+    fn server_user_cancellation_retains_typed_outcome() {
+        assert!(matches!(
+            classify_query_failure(
+                Some(&tokio_postgres::error::SqlState::QUERY_CANCELED),
+                Some("canceling statement due to user request")
+            ),
+            ProbeError::QueryCancelled
+        ));
+    }
+
+    #[test]
+    fn unrelated_sqlstate_with_cancellation_message_is_not_acknowledgement() {
+        assert!(matches!(
+            classify_query_failure(
+                Some(&tokio_postgres::error::SqlState::INTERNAL_ERROR),
+                Some("canceling statement due to user request")
+            ),
+            ProbeError::Database
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejected_cancellation_still_waits_for_cleanup() {
+        let closed = Arc::new(AtomicBool::new(false));
+        let cleaned = closed.clone();
+        let result = after_cleanup::<(), ()>(Err(ProbeError::Database), async move {
+            tokio::task::yield_now().await;
+            cleaned.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+        assert!(closed.load(Ordering::SeqCst));
+        assert!(matches!(result, Err(ProbeError::Database)));
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_overrides_acknowledged_cancellation() {
+        let result = after_cleanup(Ok::<_, ProbeError>(None::<()>), async {
+            Err::<(), _>(ProbeError::Validation("backend remains"))
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(ProbeError::Validation("backend remains"))
+        ));
+    }
     #[test]
     fn pushdown_rejects_missing_lower_sequence_bound() {
         let plan = serde_json::json!([{"Plan":{"Node Type":"Foreign Scan","Remote SQL":"SELECT count(*),min(sequence),max(sequence) FROM ledger_sample WHERE run_id='test' AND sequence<=10000"}}]);
