@@ -1,4 +1,4 @@
-FROM rust:1.98.1-bookworm@sha256:c49256cbe5ea0188bc658a689500d70c41eb51f009a7a7be209caf60a944f3ec AS build
+FROM rust:1.99.0-bookworm@sha256:37f847a196b12e0c6298d265b99075a8bc9176f2bb22e434b4340ab7342ca3af AS build
 WORKDIR /workspace
 COPY . .
 RUN cargo build --locked --release -p reltide-api -p reltide-capacity-probe
