@@ -16,7 +16,7 @@
     "@repo/design-system": "workspace:*",
     "@repo/next-config": "workspace:*",
     "fumadocs-core": "16.15.17",
-    "fumadocs-mdx": "15.4.5",
+    "fumadocs-mdx": "15.4.6",
     "fumadocs-openapi": "12.1.0",
     "fumadocs-ui": "16.15.17",
     "geist": "1.7.2",
