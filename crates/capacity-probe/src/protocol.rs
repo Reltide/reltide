@@ -30,6 +30,8 @@ pub enum ProbeError {
     Validation(&'static str),
     #[error("database operation failed")]
     Database,
+    #[error("analytics query cancelled by user request")]
+    QueryCancelled,
     #[error("Temporal operation failed")]
     Temporal,
     #[error("probe I/O failed")]

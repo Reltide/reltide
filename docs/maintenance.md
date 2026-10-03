@@ -163,3 +163,111 @@ exporter requests and 768 in three processor batches; these are separate from th
 waiting queue and do not bound incoming request decoding or total RSS. The memory
 limiter remains 96 MiB and the container ceiling remains 128 MiB. Overflow/loss
 experiments and continuous memory sampling belong to later tasks.
+
+## Capacity evidence reports
+
+Run the offline evaluator with `node tools/capacity/report.mjs --verdict .capacity/<run-id>`.
+It writes `report.json`, `report.csv` and `report.md` in that directory and exits
+0 for PASS, 1 for FAIL, or 2 for BLOCKED (including missing/unreadable evidence).
+It performs no host, Docker, cloud or R2 operations. A proven failure takes
+precedence over absent evidence, both within components and in the combined
+verdict. Unit fixtures exercise classification; they are not staging measurements.
+
+The report consumes the existing `load-events.ndjson`, `load-manifest.json`, and
+`integration-result.json` producer files. Host samples use `host-samples.ndjson`.
+An additive `evidence.json` has `schema_version: 1`, the outer `run_id`, `manifest`,
+and future `backups`, `restarts` and `restores` arrays. Programmatic evaluation
+accepts these same objects with `events`, `host_samples`, `load_manifest` and
+`integration` fields. The integration result stores the local callback under
+`load`. Producer files are authoritative: the envelope cannot replace their
+measurements, outer identity, shortened-run labels or `capacity_pass: false`.
+All top-level records must identify the same run. Record sequences must be
+continuous from one; logical load-event order is reconstructed from unique sequences when concurrent writes reorder physical lines. The report records that reordering; duplicate/gapped sequences still fail. Host sample and counter order stays strict; host/container/collector counters must not reset. A malformed or
+truncated stream retains valid observations and cannot erase a failure.
+
+Native `manifest` evidence declares `kind: "native-staging"`, the exact approved
+host identity, image SHA-256 digests by steady-service name, `config_sha256`,
+`fixture_run_id`, frozen endpoint URLs grouped by app/web/docs/api, prescribed
+seed counts, and UTC `phases` (`name`, `started_at`, `completed_at`, `duration_ms`,
+`http_rps`). Phase declarations require realized HTTP and telemetry admissions/completions inside
+the measured UTC interval, with the declared duration matching that interval.
+Every minute must contain the prescribed workload; rolling one-second admission
+counts must not exceed the phase HTTP rate or ten steady telemetry events. A
+minute-sized burst cannot substitute for sustained load. Stored row totals must
+agree with proof rows and admissions; missing proof counts remain incomplete.
+Seed admissions require the prescribed current and aged totals. Seed admission
+events use the existing `telemetry_accepted` record with `phase: "seed"` and its
+`cohort`. Native stored events also carry `cohort` (current, aged, boundary or
+steady), so proof totals and observed expiry can reconcile the final accounting.
+Positive storage, ordinary cohort counts and zero-after-expiry observations must
+agree; declaring rows expired cannot replace those measurements. Current local
+records without cohort relationships remain incomplete. Thirteen steady services are sampled; the transient initializer needs
+a successful check, rather than a continuously running container. Native host
+records retain `parseHostSample` fields, add outer `run_id`/`sequence`, and map
+each container ID to its declared `service`.
+
+Native checks use `{ run_id, passed, sha256 }`: the hash identifies the retained
+check evidence, never an error/log string. Required check names are `baseline`,
+`limits`, `load_counts`, `seed_counts`, `initializer`, `least_privilege`,
+`outage_isolation`, `extension_after_restore`, `retention`, `wal_freshness`,
+`encrypted_download`, `backup_limits`, `restart_coverage`, `restart_replay`,
+`lost_ack_once`, `recovery_common_cut`, `recovery_volumes`, and `recovery_checks`.
+A check is a reference to independently retained evidence, not permission to
+replace contradictory measurements or missing required numeric observations.
+The limits check covers the approved connection/concurrency/memory ceilings,
+query/collector bounds, log rotation, no-added-swap and resource ownership.
+The backup-limits check includes all-attempt spool, R2 usage/reservations and
+account allowances; receipt totals alone cannot establish those controls.
+
+The existing `AnalyticsProbeOutput` remains authoritative for exact fixture
+count/range, ordered text/integer sample, remote aggregate/filter pushdown and
+library/SQL pins. A different fixture ID must be explicitly related through
+`manifest.fixture_run_id`; unrelated runs cannot be combined. The native runner
+must add measured `search.elapsed_ms` to the existing foreground search output
+and `scheduling_delay_ms` to workflow completion records. HyperDX results require
+positive integer `rows`, a nonempty `saved_search_id`, and `first_id` equal to the
+SHA-256 of `${outer_run_id}:current:1`; this telemetry fixture is separate from
+`manifest.fixture_run_id`, which identifies the analytics fixture. Current local producers
+do not supply these separate timings: combined foreground time does not establish
+HyperDX p95, and workflow completion time does not establish scheduling delay.
+HTTP distributions remain separate per frozen endpoint and required phase, with
+counts; a fast soak cannot dilute a slow ramp. Each phase requires the measured
+equal service mix and round-robin endpoint mix. Foreground search/analytics pairs
+must recur in every ten-second admission slot and finish inside the measured
+phase; separate query admission times are not inferred from the combined record.
+Workflow starts and completions match on workflow ID, Temporal run ID, sequence,
+phase and admission UTC, with one matched completion in every ten-second slot.
+Missing recurring observations remain incomplete, even with passing check hashes.
+CPU windows clip the leading sample interval at the exact one/five-minute boundary,
+matching the live guard; clock offsets must be finite signed numeric measurements. Thresholds
+are HTTP p95 ≤500 ms, workflow delay/completion p95 ≤5/10 seconds, steady telemetry
+searchable within 30 seconds, and separate foreign/HyperDX p95 ≤2 seconds.
+
+Only predeclared `manifest.induced_windows` of kind `restart`, `restore`, or
+`wal-fault` may exempt a matching service/time failure. Windows carry the outer
+run ID, service, declaration/start/completion UTC, verified ownership and its
+SHA-256, and a run-bound recovery check. Their durations remain in the report.
+No window exempts OOM, guard breaches, telemetry drops/rejections, or failed
+required checks. Restart results retain service/outage/healthy/replay fields and
+a measured healthy five-minute interval; readiness must return within 120 seconds. Windows use `declared_at`, `started_at`, `completed_at`, `ownership_verified`, `ownership_sha256` and `recovery_check`.
+
+Native `retention.tables` records the complete data-table inventory with `name`, `ttl_days: 3` and `ddl_sha256`. Ordinary expiry needs the existing baseline/verified events, unchanged three-day DDL/mutation snapshots, and positive-before/zero-after boundary observations; the temporary prepared fixture alone is insufficient. Native `collector` records carry `run_id`, `sequence`, and cumulative `accepted`, `dropped`, `rejected` counters. Existing Prometheus collector event strings are separately inspected for refused/dropped/failed counts and resets, without serializing their labels.
+
+Future backup/restore producers retain the [approved receipt/result contracts](superpowers/plans/2026-09-27-staging-capacity.md).
+Receipts add outer run identity and independent encrypted-download verification;
+application receipts pin the extension image/library/SQL, Temporal receipts have
+no extension. Restores reference same-kind encrypted receipt hashes, preserve
+unmounted source volumes, identify distinct owned fresh targets, share a UTC cut,
+and carry commit watermarks and RPO/RTO. Their checks cover download/decrypt/verify
+inclusion, clean volumes and extension compatibility. Restores additionally retain `started_at`, `healthy_at`, `extensions` matching their receipts, `ownership_verified`, `ownership_sha256`, and `checks.sha256`; numeric RTO must agree with the recorded interval. RPO ≤300 seconds and RTO
+≤1,800 seconds are required for each database. PostgreSQL restore does not prove
+recovery of remote ClickHouse data.
+
+Reports serialize validated numeric values, fixed reason text, hashes and UTC
+fields. They omit raw logs, SQL/EXPLAIN, URLs/DSNs, metric labels and arbitrary
+errors. Keep raw evidence, encryption keys, archives and secret-bearing files
+outside Git. Reports label synthetic-shell coverage, growth projections and
+clean-volume recovery; they do not claim future business-request performance or
+cold-host RTO. Shortened local runs and pruning clones remain incomplete for
+native capacity. Tasks 5, 6 and 8 must supply the missing producer evidence;
+absence is BLOCKED and cannot be replaced with a unit-fixture PASS.

@@ -1,4 +1,5 @@
 use reltide_capacity_probe::{
+    analytics::{AnalyticsConfig, probe_analytics_cancellable},
     client::{export_history, replay_history, start_probe},
     ledger::{LedgerActivities, validate_seed},
     protocol::{ProbeConfig, ProbeError, ProbeEvent, ProbeInput, decode_input, validate},
@@ -49,6 +50,22 @@ async fn run() -> Result<(), ProbeError> {
         ));
     };
     match command.as_str() {
+        "probe-analytics" => {
+            let input = decode_input(&stdin().await?)?;
+            let config = AnalyticsConfig {
+                application_database_url: std::env::var("CAPACITY_ANALYTICS_DATABASE_URL")
+                    .map_err(|_| ProbeError::Validation("scoped analytics DSN required"))?,
+            };
+            let stop = async {
+                let _ = tokio::signal::ctrl_c().await;
+            };
+            let output = serde_json::to_string(
+                &probe_analytics_cancellable(&input.run_id, &config, stop).await?,
+            )
+            .map_err(|_| ProbeError::Io)?;
+            println!("{output}");
+            Ok(())
+        }
         "worker" => run_worker(&config()?).await,
         "start" => {
             let input = decode_input(&stdin().await?)?;

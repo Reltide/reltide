@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod client;
 pub mod ledger;
 pub mod protocol;
