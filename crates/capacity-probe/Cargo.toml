@@ -15,7 +15,7 @@ temporalio-common = "=1.0.0"
 temporalio-macros = "=1.0.0"
 temporalio-workflow = "=1.0.0"
 futures = "=0.3.34"
-tokio = { version = "=1.53.1", features = [
+tokio = { version = "=1.53.2", features = [
   "rt-multi-thread",
   "macros",
   "signal",

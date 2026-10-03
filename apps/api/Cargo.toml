@@ -9,7 +9,7 @@ publish = false
 axum = "=0.8.9"
 reltide-domain = { path = "../../crates/domain" }
 serde = { version = "=1.0.229", features = ["derive"] }
-tokio = { version = "=1.53.1", features = ["macros", "net", "rt-multi-thread"] }
+tokio = { version = "=1.53.2", features = ["macros", "net", "rt-multi-thread"] }
 utoipa = { version = "=6.0.0", features = ["axum_extras"] }
 utoipa-axum = "=0.3.0"
 
