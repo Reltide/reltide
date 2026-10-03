@@ -15,10 +15,10 @@
   "dependencies": {
     "@repo/design-system": "workspace:*",
     "@repo/next-config": "workspace:*",
-    "fumadocs-core": "16.15.17",
+    "fumadocs-core": "16.15.18",
     "fumadocs-mdx": "15.4.6",
     "fumadocs-openapi": "12.1.1",
-    "fumadocs-ui": "16.15.17",
+    "fumadocs-ui": "16.15.18",
     "geist": "1.7.2",
     "next": "16.3.8",
     "react": "19.3.0",
