@@ -3,7 +3,7 @@
 # Update these digests deliberately together with the recovery runbook.
 services:
   coolify:
-    image: coollabsio/coolify:4.3.23@sha256:79d5c0443696f2fcb280a4d5a15fcc091a51784e566ab212889a08e424d8187c
+    image: coollabsio/coolify:4.4.0@sha256:625859ece4fe2b5b8637e74de03c526d4b1a962ae0cdcfcf6bb145662319b9a3
     ports: !override
       - "127.0.0.1:8000:8080"
   postgres:
