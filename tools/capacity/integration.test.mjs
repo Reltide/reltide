@@ -10,6 +10,7 @@ import { test } from "vitest";
 
 import {
   createCapacityRedactor,
+  prepareTracePruningFixture,
   createReaderProbe,
   executePostgresSql,
   finalizeIntegration,
@@ -355,4 +356,96 @@ test("OpAMP listener probe requires an accepting TCP socket", async () => {
     await once(server, "close");
   }
   await assert.rejects(() => verifyTcpListener("127.0.0.1", address.port));
+});
+
+test("network cause codes survive sanitization without secret-bearing cause detail", () => {
+  const secret = "NETWORK_TEST_SECRET";
+  const error = new Error("fetch failed", {
+    cause: Object.assign(new Error(secret), { code: "ECONNRESET" }),
+  });
+  const safe = sanitizeCapacityError(
+    error,
+    createCapacityRedactor(new Set([secret]))
+  );
+  assert.match(safe.message, /ECONNRESET/u);
+  assert.ok(!JSON.stringify(safe).includes(secret));
+});
+
+test("worker readiness excludes stale and unrelated pollers", async () => {
+  const { freshWorkerPollers } = await import("./integration.mjs");
+  const pollers = [
+    { identity: "1@owned", lastAccessTime: "2026-09-30T13:00:01Z" },
+    { identity: "2@host", lastAccessTime: "2026-09-30T13:00:02Z" },
+    { identity: "1@owned", lastAccessTime: "2026-09-30T12:59:00Z" },
+  ];
+  assert.deepEqual(
+    freshWorkerPollers(
+      { pollers },
+      "owned",
+      Date.parse("2026-09-30T13:00:00Z")
+    ),
+    [pollers[0]]
+  );
+});
+
+test("pinned CLI poller timestamps use seconds and nanos", async () => {
+  const { freshWorkerPollers } = await import("./integration.mjs");
+  const poller = {
+    identity: "1@owned",
+    last_access_time: { nanos: 463_713_901, seconds: 1_790_776_550 },
+  };
+  assert.deepEqual(
+    freshWorkerPollers({ pollers: [poller] }, "owned", 1_790_776_550_000),
+    [poller]
+  );
+  assert.deepEqual(
+    freshWorkerPollers({ pollers: [poller] }, "owned", 1_790_776_551_000),
+    []
+  );
+});
+
+test("trace pruning setup preserves schema and bounds every acknowledged insert", () => {
+  const statements = [];
+  const source =
+    "CREATE TABLE otel.otel_traces (Timestamp DateTime64(9)) ENGINE=MergeTree ORDER BY (ServiceName, SpanName, toDateTime(Timestamp)) TTL toDateTime(Timestamp) + toIntervalDay(3)";
+  const runId = "pruning-test";
+  const table = "capacity_trace_pruning_pruning_test";
+  const fixture = prepareTracePruningFixture({
+    ch: (sql) => {
+      statements.push(sql);
+      if (sql === "SHOW CREATE TABLE otel.otel_traces") {
+        return source;
+      }
+      if (sql.startsWith("SHOW CREATE TABLE")) {
+        return source.replace("otel.otel_traces", `otel.${table}`);
+      }
+      return JSON.stringify({ data: [{ rows: 1_296_000 }] });
+    },
+    epochMs: 1_800_000_000_000,
+    runId,
+  });
+  assert.equal(fixture.table, table);
+  const inserts = statements.filter((sql) => sql.startsWith("INSERT"));
+  assert.equal(inserts.length, 130);
+  assert.ok(
+    inserts.every(
+      (sql) =>
+        /numbers\((?:10000|6000)\)/u.test(sql) &&
+        sql.includes("async_insert=0") &&
+        sql.includes("max_rows_to_read=50000") &&
+        sql.includes("max_memory_usage=134217728") &&
+        sql.includes("max_execution_time=5")
+    )
+  );
+  assert.match(inserts.at(-1), /numbers\(6000\)/u);
+  assert.ok(statements.every((sql) => !/ALTER|OPTIMIZE|DELETE/u.test(sql)));
+  assert.throws(() =>
+    prepareTracePruningFixture({
+      ch: () => {
+        throw new Error("must not execute");
+      },
+      epochMs: 1,
+      runId: "unsafe'",
+    })
+  );
 });
