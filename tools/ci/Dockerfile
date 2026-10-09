@@ -1,4 +1,4 @@
-FROM ghcr.io/renovatebot/renovate:44.138.0@sha256:32027ed5e5e450f76ee372fcd6e72c8114db7fdb28c97c520515a03ea4a0d77b
+FROM ghcr.io/renovatebot/renovate:44.148.4@sha256:2c7b118cb2d1b7137e63322efc0e1d3d96d5f6937ec1c35c3cd9b7de73a8ed29
 
 WORKDIR /workspace
 ENTRYPOINT ["renovate-config-validator", "--strict", "--no-global", "renovate.json"]
