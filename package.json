@@ -48,7 +48,7 @@
     "*.{json,jsonc,css,scss,yaml,yml,mdx}": "pnpm exec oxfmt"
   },
   "engines": {
-    "node": "v26.10.0"
+    "node": "26.11.1"
   },
   "packageManager": "pnpm@12.9.1"
 }
