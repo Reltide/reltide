@@ -1,11 +1,11 @@
-FROM node:26.10.0-bookworm-slim@sha256:cfa005801786b8e38fa220af518e43f5654c53b36af36b4ad5b3049225ee261e AS build
+FROM node:26.11.1-bookworm-slim@sha256:c84568746cfadd444003e37bb5d1411779bfa4a42828c798d5d800fb9076380a AS build
 ENV NEXT_TELEMETRY_DISABLED=1 CI=1
 WORKDIR /workspace
 COPY . .
 RUN npm install --global pnpm@12.6.0 && pnpm install --frozen-lockfile --ignore-scripts
 ARG APP
 RUN pnpm --dir apps/${APP} exec next build
-FROM node:26.10.0-bookworm-slim@sha256:cfa005801786b8e38fa220af518e43f5654c53b36af36b4ad5b3049225ee261e
+FROM node:26.11.1-bookworm-slim@sha256:c84568746cfadd444003e37bb5d1411779bfa4a42828c798d5d800fb9076380a
 ARG APP
 ENV NODE_ENV=production HOSTNAME=0.0.0.0 NEXT_TELEMETRY_DISABLED=1 APP=${APP}
 WORKDIR /app
