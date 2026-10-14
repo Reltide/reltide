@@ -1,0 +1,4 @@
+{
+  "404": { "error": "migration_report_not_found" },
+  "503": { "error": "migration_report_unavailable" }
+}
