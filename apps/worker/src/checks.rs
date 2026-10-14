@@ -214,12 +214,19 @@ fn run_command(
         }
     };
     let mut output = String::new();
+    let mut truncated = false;
     for reader in [stdout, stderr].into_iter().flatten() {
         match reader.join() {
-            Ok(Ok(bytes)) => output.push_str(&String::from_utf8_lossy(&bytes)),
+            Ok(Ok((bytes, stream_truncated))) => {
+                output.push_str(&String::from_utf8_lossy(&bytes));
+                truncated |= stream_truncated;
+            }
             Ok(Err(error)) => output.push_str(&format!("output read failed: {error}\n")),
             Err(_) => output.push_str("output reader stopped unexpectedly\n"),
         }
+    }
+    if truncated {
+        output.push_str("\n[output truncated; trailing evidence retained]\n");
     }
     if let Some(error) = error {
         output.push_str(&format!("\n{error}"));
@@ -242,17 +249,19 @@ fn terminate(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-fn drain(mut pipe: impl Read) -> io::Result<Vec<u8>> {
+fn drain(mut pipe: impl Read) -> io::Result<(Vec<u8>, bool)> {
     let mut retained = Vec::new();
+    let mut truncated = false;
     let mut buffer = [0; 4096];
     loop {
         let read = pipe.read(&mut buffer)?;
         if read == 0 {
-            return Ok(retained);
+            return Ok((retained, truncated));
         }
         retained.extend_from_slice(&buffer[..read]);
         if retained.len() > MAX_CHECK_OUTPUT_BYTES / 2 {
             retained.drain(..retained.len() - MAX_CHECK_OUTPUT_BYTES / 2);
+            truncated = true;
         }
     }
 }
@@ -316,6 +325,41 @@ mod tests {
         assert_eq!(result.exit_code, Some(0));
         assert!(result.output.len() <= MAX_CHECK_OUTPUT_BYTES);
         assert!(result.output.contains("error-tail"));
+        assert!(result.output.contains("output truncated"));
+    }
+
+    #[test]
+    fn truncated_stdout_is_disclosed_below_the_final_cap() {
+        let result = run_command(
+            "node",
+            &[
+                "--eval",
+                "process.stdout.write('界'.repeat(100000) + 'stdout-tail');",
+            ],
+            Path::new("/tmp"),
+            Duration::from_secs(10),
+        );
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.output.len() < MAX_CHECK_OUTPUT_BYTES);
+        assert!(result.output.contains("stdout-tail"));
+        assert!(result.output.contains("output truncated"));
+    }
+
+    #[test]
+    fn truncated_stderr_is_disclosed_below_the_final_cap() {
+        let result = run_command(
+            "node",
+            &[
+                "--eval",
+                "process.stderr.write('界'.repeat(100000) + 'stderr-tail');",
+            ],
+            Path::new("/tmp"),
+            Duration::from_secs(10),
+        );
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.output.len() < MAX_CHECK_OUTPUT_BYTES);
+        assert!(result.output.contains("stderr-tail"));
+        assert!(result.output.contains("output truncated"));
     }
 }
 
