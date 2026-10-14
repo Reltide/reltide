@@ -74,3 +74,19 @@ No other considered behavior was excluded from judgment.
 **Local implementation: yes, with the accepted Minor above.** The requested controlled Stripe failure-to-fix loop is real, integrated, inspectable, and appropriately limited. The saved verification evidence is sufficient for this implementation review, and no Critical or Important defect was found. Final human review/merge policy still applies.
 
 **Migration publication: no.** The generated patch is a target-only preparation artifact; repository-wide version evidence and candidate-independent review remain unconfigured/incomplete. Do not publish or present the prepared migration as independently reviewed. This final branch review does not change either blocker.
+
+## Scoped final-fix re-review — 2026-10-14
+
+Reviewed exactly `3737a5a..b392b0f` using the saved fix diff and `final-fix-report.md`, with Graft context before targeted source inspection. HEAD was `b392b0f106dc92c336a2853ba30bc9446d22d65d`. The initial review above was committed unchanged: its pre-append SHA-256 is `45fa9212b629829e4a82d745be7df303362e2b5f2f425e6759cb778ea88ac4ce`. This addition preserves that historical assessment and records the later fix independently.
+
+**Prior Minor: ADDRESSED.** `apps/worker/src/checks.rs:252` now returns retained bytes with a persistent truncation flag set whenever a stream loses earlier bytes. `apps/worker/src/checks.rs:217` combines the flags from both drains, and `apps/worker/src/checks.rs:228` appends a notice before the existing final bound. Thus stdout-only or stderr-only truncation is disclosed even when the combined text is below 16 KiB. When the combined text exceeds that bound, `apps/worker/src/checks.rs:269` preserves the existing UTF-8-safe truncation behavior and its own notice. The change preserves the raw tail budgets, actual exit codes, classification, timeout, and process-group behavior.
+
+The tests at `apps/worker/src/checks.rs:315`, `apps/worker/src/checks.rs:332`, and `apps/worker/src/checks.rs:349` exercise real Node output, retained tail markers, size limits, and the notice. The two single-stream cases specifically expose the original defect rather than relying on final aggregate truncation. The reported RED run failed exactly the three notice assertions before the implementation change; the reported uncached GREEN worker checks passed all 17 worker tests. The updated runbook describes the resulting behavior and still discloses that concatenated streams do not preserve chronology.
+
+I inspected the saved 637-line final release log's result rows: the new stdout/stderr regressions pass in all three required Rust configurations, each with 65 passed, zero failed, and four pre-existing service-dependent tests ignored. The log also records 123 frontend tests. The fix report and distinct post-fix verification section retain the successful full release/17 uncached Nx tasks and fresh seven-outcome demo, fingerprints, artifact equality, and API equality evidence. These remain executor/coordinator observations; I did not rerun suites, the demo, API requests, or browser checks.
+
+**New Critical/Important breakage in the fix diff: none found.** The changed runtime logic is limited to carrying and displaying lost-output information, and the documentation separates the original and post-fix results. No unchanged behavior was reopened as a new finding. The original review's declined-to-judge boundaries still apply.
+
+**Scoped verdict: approved.** The sole prior Minor is resolved, leaving no open findings from this final implementation review. The local MVP remains ready for the normal human merge decision. Migration publication remains held for unknown account-version evidence and unconfigured candidate-independent review; this scoped review does not clear either blocker.
+
+Only this append was written by the reviewer. No source, index, HEAD, branches, services, or dependencies were changed, and no commit or subagent was created.
