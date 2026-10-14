@@ -8,7 +8,7 @@ The user explicitly approved current manifest Node `26.11.1` and pnpm `12.11.2`.
 
 The coordinator previously ran `pnpm install --frozen-lockfile`: all 1,224 supply-chain policy entries passed, with no lockfile changes. It also ran the isolated historical before/after installs and checks under the approved runtime, including the specifically evidenced expected old regression. Delivery did not duplicate those installs.
 
-`pnpm ci:release` completed with exit 0. Its complete captured output was read from local ignored `.superpowers/sdd/2026-10-14-stripe-mvp/task-5-release.log` (956 lines). Docker 29.4 was available; no fallback or gate exemption was needed.
+`pnpm ci:release` completed with exit 0. Its complete captured output was read from local ignored `.reltide/verification/2026-10-14-stripe-mvp/task-5-release.log` (956 lines). Docker 29.4 was available; no fallback or gate exemption was needed.
 
 | Gate executed by release | Actual result |
 | --- | --- |
@@ -24,7 +24,7 @@ Each Rust configuration passed 63 tests, zero failures, with the same four pre-e
 
 ## Actual local migration and dashboard
 
-Release does not invoke the artifact-producing demo target. Delivery separately ran `pnpm nx run reltide-worker:stripe-demo --output-style=static`: exit 0, cache 0/1, seven real checks, publication held. Captured local log: `.superpowers/sdd/2026-10-14-stripe-mvp/task-5-demo.log`. Runtime evidence recorded Node `v26.11.1` and npm `11.20.0`.
+Release does not invoke the artifact-producing demo target. Delivery separately ran `pnpm nx run reltide-worker:stripe-demo --output-style=static`: exit 0, cache 0/1, seven real checks, publication held. Captured local log: `.reltide/verification/2026-10-14-stripe-mvp/task-5-demo.log`. Runtime evidence recorded Node `v26.11.1` and npm `11.20.0`.
 
 | Check | Status | Exit | Duration ms |
 | --- | --- | --- | --- |
