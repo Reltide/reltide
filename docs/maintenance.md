@@ -1,6 +1,6 @@
 # Quality gates and dependency maintenance
 
-Use exact Node from `.node-version`, pnpm from `package.json#packageManager`, and Rust from `rust-toolchain.toml`. From a clean checkout, run `pnpm install --frozen-lockfile`. Docker is needed for the pinned validator; other checks need no hosted credentials.
+Use exact Node from `.node-version` (`26.11.1`), pnpm from `package.json#packageManager` (`12.11.2`), and Rust from `rust-toolchain.toml`. The current Node/pnpm pins were explicitly approved for the Stripe MVP; older setup instructions must not downgrade them or bypass runtime validation. From a clean checkout, run `pnpm install --frozen-lockfile`. Docker is needed for the pinned validator; other checks need no hosted credentials.
 
 ## Commands
 
@@ -23,12 +23,21 @@ Use exact Node from `.node-version`, pnpm from `package.json#packageManager`, an
 | `pnpm rust:ci:no-default-features` | Clippy, tests, and optimized build without default workspace features |
 | `pnpm rust:ci:all-features` | Clippy, tests, and optimized build with every workspace feature |
 | `pnpm ci:release` | Config validation, full frontend/docs suite, and all Rust configurations |
+| `pnpm nx run reltide-worker:stripe-demo` | Uncached generation and real checks of the fixed trusted Stripe fixture; writes local artifacts |
 
 Reproduce affected checks with `NX_BASE=<base-sha> NX_HEAD=<merge-sha> pnpm ci:affected`. CI tests the PR merge commit against its base with full history. Root checks always run, even for an empty affected set. Shared npm manifests/lockfiles, Node, TypeScript/Oxc configuration, root tools, workflows, updater config, and infrastructure select all platform projects. Cargo manifests/lockfiles, Rust configuration, and API inputs flow through Rust → client → dashboard/docs. Tests check affected projects and scheduled tasks.
 
 Historical `fixtures/stripe-migration` packages are excluded from platform tasks and updates. Their old SDKs and separate lockfiles are evidence fixtures, not shipped apps. Nx infers placeholder typecheck targets for them; placeholders are not counted as successful verification. Use their [README](../fixtures/stripe-migration/README.md) for isolated checks.
 
-No optional Cargo features exist yet. Default, no-default-features, and all-features are valid but equivalent for workspace features; each runs real API integration tests. Add supported combinations with any new feature. Replace all-features if features become mutually exclusive. Worker/domain zero-test outputs do not establish application behavior; add integration/replay tests when those behaviors exist.
+No optional Cargo features exist yet. Default, no-default-features, and all-features are valid but equivalent for workspace features; each runs real domain, worker, and API tests. Add supported combinations with any new feature. Replace all-features if features become mutually exclusive. Four existing capacity tests require local PostgreSQL/Temporal and remain ignored by the credential-free release suite; this suite does not prove live capacity or workflow replay.
+
+## Stripe MVP verification
+
+Use the [local demo guide](stripe-mvp-demo.md) for isolated historical fixture checks and startup. The worker executes fixed commands in disposable OS temporary directories. It preserves original fixtures, package scripts, and the include-all TypeScript configuration; the generated candidate contains only explicit target files and the pinned control. The unchanged unknown-default client is checked separately in the old package. A successful target-only check never verifies a package-wide upgrade or migration of the original tests.
+
+`pnpm ci:release` runs workspace formatting/linting, all Vitest tests (including contract and affected-graph regressions), uncached platform builds/typechecking, client drift, docs links/standalone smoke, and locked Rust format/Clippy/tests/optimized builds in all three configurations. It does not invoke the artifact-producing `stripe-demo` target; run that separately and inspect all seven outcomes, the fingerprints, generated patch, and held blockers. Docker absence leaves the release gate incomplete even if separate checks pass. Do not change protected gates to remove that limitation.
+
+Report output retains bounded stdout/stderr tails, not complete process transcripts. The API serves a domain-valid report only, caps input at 1 MiB, returns generic JSON errors, and sets `Cache-Control: no-store` on every report response. Any sibling `run-marker.json` makes evidence unavailable. Confirm the recorded worker PID is no longer running before removing the marker and rerunning; see the guide for recovery. Local evidence is unsigned, and Greptile review tied to a candidate revision remains future integration. Both the unknown account default and missing independent review remain publication blockers.
 
 ## Required checks and isolation
 
@@ -111,7 +120,7 @@ Record failing upgrade PRs in the dashboard and blockers below with versions, fa
 ## Private capacity experiment preflight
 
 `capacity-experiment:check-config`, `:build-images`, and `:integration` are uncached
-Nx targets. Builds require Docker/Buildx, Node 26.10.0 and pnpm 12.6.0, and export
+Nx targets. Builds require Docker/Buildx and the exact current Node/pnpm pins, and export
 secret-free linux/amd64 OCI archives plus a separate Docker archive for the local
 legacy image store into ignored `.capacity/<CAPACITY_RUN_ID>/`. Build inputs,
 source/submodule pins, dirty-source flag and actual build-input checksum, OCI

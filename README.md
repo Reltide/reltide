@@ -8,7 +8,7 @@ We build Reltide in public at [Reltide/reltide](https://github.com/Reltide/relti
 
 ## Local foundation
 
-Use Node `26.10.0`, pnpm `12.6.0`, and the Rust toolchain pinned in `rust-toolchain.toml`. From a clean checkout:
+Use Node `26.11.1` from `.node-version`, pnpm `12.11.2` from `package.json#packageManager`, and the Rust toolchain pinned in `rust-toolchain.toml`. These current manifest pins were explicitly approved for the Stripe MVP. From a clean checkout:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -20,7 +20,7 @@ pnpm rust:check
 pnpm ci:release
 ```
 
-Start one shell with `pnpm nx run app:dev`, `pnpm nx run web:dev`, or `pnpm nx run docs:dev`. They listen on ports 3000, 3001, and 3004. The frontend shells build without credentials or hosted services. They do not yet connect to repositories or run migrations.
+Start one shell with `pnpm nx run app:dev`, `pnpm nx run web:dev`, or `pnpm nx run docs:dev`. They listen on ports 3000, 3001, and 3004. The apps build without credentials or hosted services. The dashboard displays the local Stripe migration report when connected to the Rust API.
 
 `pnpm check` runs a read-only workspace check with Ultracite's Oxlint and Oxfmt configuration. `pnpm nx run-many -t check` runs the same checks as cacheable Nx targets for each frontend project; `pnpm nx run app:check` checks one project. `pnpm typecheck` runs TypeScript separately, and `pnpm fix` applies available lint and formatting fixes. The JSON-only TypeScript config package uses Oxfmt for its Nx check target.
 
@@ -38,16 +38,21 @@ Renovate proposes stable npm, Cargo, toolchain, container, and action updates, i
 
 ## Rust workspace
 
-`apps/api`, `apps/worker`, and `crates/domain` are Cargo workspace members and Nx projects. The worker is still a compile-only skeleton. The API exposes `GET /api/v1/health` and `GET /openapi.json` from the same Rust router and OpenAPI registration. Health returns `{ "status": "ok" }`; it confirms process availability, not database or provider readiness.
+`apps/api`, `apps/worker`, and `crates/domain` are Cargo workspace members and Nx projects. The worker generates and verifies a controlled Stripe migration; the domain owns transformation and evidence policy. The API exposes `GET /api/v1/health`, `GET /api/v1/migrations/latest`, and `GET /openapi.json` through the Rust router and OpenAPI registration. Health returns `{ "status": "ok" }`; it confirms process availability, not database or provider readiness.
 
-For a local dashboard connection, start the API in one shell and the app in another:
+Generate the report first, then start the API and dashboard in separate shells:
 
 ```bash
+cargo run -p reltide-worker --locked -- stripe-demo
 cargo run -p reltide-api --locked
 RELTIDE_API_BASE_URL=http://127.0.0.1:3002 pnpm nx run app:dev
 ```
 
-The API listens on `127.0.0.1:3002` by default; set `RELTIDE_API_BIND` to another socket address if needed. `RELTIDE_API_BASE_URL` is server-only. With no value, the dashboard shows “Not configured”; an invalid URL, failed request, non-success response, or unexpected health body shows “Unavailable”. The app build does not require an API process. Export the Rust contract without starting a server with `cargo run -q -p reltide-api --locked -- --print-openapi`.
+The worker writes ignored `.reltide/demo/report.json`, `migration.patch`, and `pull-request.md`. It generates explicit target code from old inputs and verifies a sparse disposable package for Stripe SDK `10.17.0` / API `2022-08-01` → SDK `12.0.0` / API `2022-11-15`. Original scripts and TypeScript configuration stay unchanged. This target-only preview does not establish repository-wide upgrade safety; the unknown account default and missing independent review keep publication held. No Stripe requests or GitHub writes occur. See the [local demo guide](docs/stripe-mvp-demo.md) for check scope, artifacts, configuration, and recovery.
+
+The API listens on `127.0.0.1:3002` by default; set `RELTIDE_API_BIND` to another socket address if needed. Its report defaults to the worker output; `RELTIDE_MIGRATION_REPORT` selects a trusted local path at startup. `RELTIDE_API_BASE_URL` is server-only and read at app runtime, so it can be supplied when starting a production build. With no value, the dashboard shows “Not configured”; a missing report shows an empty state, while invalid configuration or unavailable evidence shows “Unavailable”. Report requests are uncached. The app build needs no API process. Export the Rust contract without starting a server with `cargo run -q -p reltide-api --locked -- --print-openapi`.
+
+Greptile is a future independent reviewer tied to the generated candidate revision; its integration is not active. Provider monitoring, general repository execution, GitHub draft PR publication, and OpenAI support remain later work. Human review and merge remain required.
 
 The Rust contract generates `packages/api-client/openapi.json` and the committed Hey API Fetch SDK. After changing a Rust API operation or schema, run `pnpm nx run @repo/api-client:generate` and commit both outputs. `pnpm nx run @repo/api-client:check-contract` regenerates into a temporary directory and fails on any committed drift without editing the checkout. The client build target runs this check and TypeScript type checking; `pnpm build` reaches it through the dashboard dependency. `pnpm test:api-contract` runs the local contract, dashboard response, and Nx graph tests.
 

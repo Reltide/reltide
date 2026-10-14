@@ -20,7 +20,7 @@
 - Record source fingerprints, actual command results, bounded logs, and explicit target-only scope.
 - Preserve original fixtures, protected checks, exact dependencies, and historical fixture lockfiles.
 - No hosted credentials, production deployment, GitHub writes, or live Stripe calls are needed.
-- Tool versions must be resolved explicitly: supplied instructions say Node `26.10.0`/pnpm `12.6.0`; current manifest pins are `26.11.1`/`12.11.2`. Do not downgrade the manifest or bypass runtime validation.
+- Tool-version mismatch resolved: the user explicitly approved current manifest Node `26.11.1`/pnpm `12.11.2` over the older supplied pins. No manifest downgrade or runtime-validation bypass.
 - Migration execution targets are uncached. Refresh Graft after substantial edits.
 
 ## Review Focus
@@ -45,10 +45,10 @@
 - Each `CheckResult` contains command, exit code when available, status, bounded output, and duration. Distinguish `passed`, `expected_failure`, `failed`, and `not_run`.
 - Produce `MigrationReport::validate(&self) -> Result<(), MigrationError>`; a locally verified report requires every mandatory check, an evidenced expected old regression, and retained publication blockers.
 
-- [ ] Write `explicit_target_generates_latest_charge_patch`, `old_pin_retains_legacy_access`, `unknown_default_blocks_package_upgrade`, `unsupported_source_is_rejected`, and `missing_or_failed_checks_cannot_validate_success`. Assert string, expanded-object, and null handling in the generated helper, preserved control dispositions, and held publication.
-- [ ] Run `cargo test -p reltide-domain --locked`; confirm the new interfaces are missing before implementation.
-- [ ] Implement exact supported-pattern guards and the pure transformation. Unsupported or multiply matched patterns return errors. Add serde/utoipa using existing pinned versions and update the Cargo lockfile without unrelated upgrades.
-- [ ] Rerun domain tests and Clippy; commit `feat(domain): model controlled Stripe migration evidence`.
+- [x] Write `explicit_target_generates_latest_charge_patch`, `old_pin_retains_legacy_access`, `unknown_default_blocks_package_upgrade`, `unsupported_source_is_rejected`, and `missing_or_failed_checks_cannot_validate_success`. Assert string, expanded-object, and null handling in the generated helper, preserved control dispositions, and held publication.
+- [x] Run `cargo test -p reltide-domain --locked`; confirm the new interfaces are missing before implementation.
+- [x] Implement exact supported-pattern guards and the pure transformation. Unsupported or multiply matched patterns return errors. Add serde/utoipa using existing pinned versions and update the Cargo lockfile without unrelated upgrades.
+- [x] Rerun domain tests and Clippy; commit `feat(domain): model controlled Stripe migration evidence`.
 
 ### Task 2: Runnable local worker and artifacts
 
@@ -61,14 +61,14 @@
 - Artifacts: `report.json`, `migration.patch`, and `pull-request.md`; report embeds the displayed diff/preview so the API needs only one atomic input.
 - Nx: `reltide-worker:stripe-demo`, `cache: false`, running the same CLI.
 
-- [ ] Write integration tests `demo_generates_candidate_instead_of_copying_expected_source`, `command_failure_is_reported`, `unexpected_regression_error_is_not_expected_failure`, and `failed_rerun_replaces_previous_success`. Assert original inputs are unchanged and candidate output has the new helper.
-- [ ] Run worker tests and confirm failure before implementing the runner.
-- [ ] Prepare disposable old and target-only candidate packages. Install with fixed lockfiles and `npm ci --ignore-scripts`. Use the historical target lockfile as dependency evidence; generate target client/helper code from the old source, not the expected implementation.
-- [ ] Run old typecheck and baseline, old new-shape regression, candidate typecheck and new-shape regression, and separate pinned/unknown control verification. An expected failure requires the specific assertion mismatch, not merely any nonzero exit. Fixed scripts never call Stripe resource methods.
-- [ ] Record SHA-256 for every analysis/verification input, bounded subprocess output, exit codes, duration, and timeout errors. Use already locked sha2/tempfile versions if needed. Execute commands as program-plus-arguments, never a shell string.
-- [ ] Mark a new attempt before executing checks; atomically publish the finished report. Errors and interrupted attempts must supersede stale success. Protect concurrent runs with exclusive creation of a run marker and clear recovery guidance.
-- [ ] Render the actual unified patch and PR preview with evidence, exact tested scope, checks, and unresolved version/review blockers. Keep candidate/work directories and artifacts ignored; do not cache migration work.
-- [ ] Run the real CLI, inspect all artifacts, rerun worker tests/Clippy, and commit `feat(worker): run verified Stripe fixture migration`.
+- [x] Write integration tests `demo_generates_candidate_instead_of_copying_expected_source`, `command_failure_is_reported`, `unexpected_regression_error_is_not_expected_failure`, and `failed_rerun_replaces_previous_success`. Assert original inputs are unchanged and candidate output has the new helper.
+- [x] Run worker tests and confirm failure before implementing the runner.
+- [x] Prepare disposable old and target-only candidate packages. Install with fixed lockfiles and `npm ci --ignore-scripts`. Use the historical target lockfile as dependency evidence; generate target client/helper code from the old source, not the expected implementation.
+- [x] Run old typecheck and baseline, old new-shape regression, candidate typecheck and new-shape regression, and separate pinned/unknown control verification. An expected failure requires the specific assertion mismatch, not merely any nonzero exit. Fixed scripts never call Stripe resource methods.
+- [x] Record SHA-256 for every analysis/verification input, bounded subprocess output, exit codes, duration, and timeout errors. Use already locked sha2/tempfile versions if needed. Execute commands as program-plus-arguments, never a shell string.
+- [x] Mark a new attempt before executing checks; atomically publish the finished report. Errors and interrupted attempts must supersede stale success. Protect concurrent runs with exclusive creation of a run marker and clear recovery guidance.
+- [x] Render the actual unified patch and PR preview with evidence, exact tested scope, checks, and unresolved version/review blockers. Keep candidate/work directories and artifacts ignored; do not cache migration work.
+- [x] Run the real CLI, inspect all artifacts, rerun worker tests/Clippy, and commit `feat(worker): run verified Stripe fixture migration`.
 
 ### Task 3: Read-only report API and generated contract
 
@@ -80,10 +80,10 @@
 - `RELTIDE_MIGRATION_REPORT` optionally selects the trusted local report; otherwise use the CLI's default local output. No request parameter controls filesystem paths.
 - Generated Fetch SDK exposes `getLatestMigration` and `MigrationReport`.
 
-- [ ] Write router tests for valid reports, missing reports, malformed JSON, oversized input, invalid schema/check policy, and unchanged health/offline export. Confirm new operation is absent before implementation.
-- [ ] Implement bounded report reads off the async executor, `MigrationReport::validate`, generic public errors, and `no-store` response semantics. Set a documented 1 MiB report-size ceiling.
-- [ ] Register routes/types through utoipa, preserve pure offline OpenAPI export, and regenerate via `pnpm nx run @repo/api-client:generate`.
-- [ ] Run API integration tests, `pnpm nx run @repo/api-client:check-contract`, and contract tests; commit `feat(api): expose migration evidence contract`.
+- [x] Write router tests for valid reports, missing reports, malformed JSON, oversized input, invalid schema/check policy, and unchanged health/offline export. Confirm new operation is absent before implementation.
+- [x] Implement bounded report reads off the async executor, `MigrationReport::validate`, generic public errors, and `no-store` response semantics. Set a documented 1 MiB report-size ceiling.
+- [x] Register routes/types through utoipa, preserve pure offline OpenAPI export, and regenerate via `pnpm nx run @repo/api-client:generate`.
+- [x] Run API integration tests, `pnpm nx run @repo/api-client:check-contract`, and contract tests; commit `feat(api): expose migration evidence contract`.
 
 ### Task 4: Migration workbench
 
@@ -93,18 +93,24 @@
 - Produce `getMigrationReport(baseUrl?: string): Promise<MigrationReportState>`, where state distinguishes `unconfigured`, `empty`, `unavailable`, and `available` with a generated-client report.
 - Consume Task 3's generated SDK; server-side Fetch only, with no database or command execution in Next.js.
 
-- [ ] Write HTTP response tests for absent configuration, 404, valid 200, failed request, malformed/missing body, and 503. Run them before implementation and confirm failure.
-- [ ] Load modern-web guidance and current official Next.js/Geist guidance. Implement the Fetch adapter with a finite timeout and `no-store` caching.
-- [ ] Replace the foundation shell with provider/version context, real source findings, evidence links, local check outcomes, generated diff, PR preview, and publication blockers. Explicitly identify synthetic fixture scope and pending independent review.
-- [ ] Provide meaningful empty/unavailable states and a reload action. Use semantic headings, accessible links/status labels, readable code previews, and responsive layout. Do not fabricate connected repositories, metrics, polling, GitHub URLs, or Greptile scores.
-- [ ] Run response tests, app typecheck/build/check, and a browser inspection against the actual API/report; commit `feat(app): show Stripe migration workbench`.
+- [x] Write HTTP response tests for absent configuration, 404, valid 200, failed request, malformed/missing body, and 503. Run them before implementation and confirm failure.
+- [x] Load modern-web guidance and current official Next.js/Geist guidance. Implement the Fetch adapter with a finite timeout and `no-store` caching.
+- [x] Replace the foundation shell with provider/version context, real source findings, evidence links, local check outcomes, generated diff, PR preview, and publication blockers. Explicitly identify synthetic fixture scope and pending independent review.
+- [x] Provide meaningful empty/unavailable states and a reload action. Use semantic headings, accessible links/status labels, readable code previews, and responsive layout. Do not fabricate connected repositories, metrics, polling, GitHub URLs, or Greptile scores.
+- [x] Run response tests, app typecheck/build/check, and a browser inspection against the actual API/report; commit `feat(app): show Stripe migration workbench`.
 
 ### Task 5: Delivery verification and quickstart
 
 **Files:** Modify `README.md` and relevant `docs/maintenance.md` instructions; add a concise local-demo guide if needed. Update plan checkboxes with actual outcomes.
 
-- [ ] Document frozen platform install, isolated historical fixture checks, CLI, local API/report configuration, and dashboard startup. Resolve the tool-version mismatch with the user before runtime checks requiring newer manifest pins.
-- [ ] Document local-only scope, unresolved version/review blockers, and Greptile's future independent-review role without claiming integration is active.
-- [ ] Run `pnpm check`, `pnpm test`, `pnpm typecheck`, `pnpm build`, contract drift checks, and workspace Rust format/Clippy/tests. Run `pnpm ci:release` with Docker; if unavailable, record the limitation and run remaining release checks separately.
+- [x] Document frozen platform install, isolated historical fixture checks, CLI, local API/report configuration, and dashboard startup. Resolve the tool-version mismatch with the user before runtime checks requiring newer manifest pins.
+- [x] Document local-only scope, unresolved version/review blockers, and Greptile's future independent-review role without claiming integration is active.
+- [x] Run `pnpm check`, `pnpm test`, `pnpm typecheck`, `pnpm build`, contract drift checks, and workspace Rust format/Clippy/tests. Run `pnpm ci:release` with Docker; if unavailable, record the limitation and run remaining release checks separately.
 - [ ] Obtain an independent whole-change review using the selected execution method; address findings and rerun affected checks. Do not publish a migration PR with incomplete evidence or verification.
-- [ ] Run `graft build`, inspect final diff/status, and commit `docs: document verified Stripe MVP workflow`. Report startup commands, verification evidence, and remaining external-integration limits.
+- [x] Run `graft build`, inspect final diff/status, and commit `docs: document verified Stripe MVP workflow`. Report startup commands, verification evidence, and remaining external-integration limits.
+
+## Recorded outcomes
+
+Tasks 1–4 are implemented in `02cb295`, `2ddbc7f`, `0503eaa`, and `7962b85`; each passed its independent task review. The worker materializes fixed verification programs from embedded Rust bytes in its disposable workspace; it does not add fixture scripts or alter protected quality configuration. Candidate verification preserves original scripts/config and explicitly uses a sparse target package. Task 4 also exports the generated operation/types through the public client barrel. Production desktop/mobile, keyboard, disclosure, reload, and console checks were completed by the coordinator against the actual API/report. Final whole-change review remains pending.
+
+Task 5 delivery verification: `pnpm ci:release` exited 0 with Docker; 123 Vitest tests, 17 uncached Nx tasks, and 63 Rust tests per required configuration passed (four existing capacity tests ignored). The actual uncached demo passed seven checks and retained both blockers. Graft refreshed; exact commands, evidence, limits, and rulings are recorded in `docs/superpowers/reviews/2026-10-14-stripe-mvp-verification.md`. Task 5 and whole-change independent reviews remain coordinator-owned and pending.
