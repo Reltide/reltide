@@ -4,11 +4,251 @@ export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
 
+/**
+ * Reasons publication remains held even after local verification.
+ */
+export type BlockerKind = 'unknown_account_default' | 'independent_review_missing';
+
+/**
+ * Fixed local verification identities; callers cannot replace mandatory checks.
+ */
+export type CheckKind = 'before_typecheck' | 'before_baseline' | 'before_regression' | 'candidate_typecheck' | 'candidate_regression' | 'pinned_control' | 'unknown_control';
+
+/**
+ * Bounded command evidence captured by the Rust runner.
+ */
+export type CheckResult = {
+    /**
+     * Actual command executed, including its fixed arguments.
+     */
+    command: string;
+    /**
+     * Measured elapsed command time in milliseconds.
+     */
+    duration_ms: number;
+    /**
+     * Actual process exit code when available.
+     */
+    exit_code?: number | null;
+    /**
+     * Fixed verification identity.
+     */
+    kind: CheckKind;
+    /**
+     * Retained combined output, at most [`MAX_CHECK_OUTPUT_BYTES`] bytes.
+     */
+    output: string;
+    /**
+     * Outcome distinguished from publication readiness.
+     */
+    status: CheckStatus;
+};
+
+/**
+ * Outcome of a real command, separating evidenced regression from failures.
+ */
+export type CheckStatus = 'passed' | 'expected_failure' | 'failed' | 'not_run';
+
+/**
+ * Authoritative provider or immutable SDK source supporting a decision.
+ */
+export type EvidenceLink = {
+    /**
+     * Whether the reference pins immutable source bytes through a commit.
+     */
+    immutable: boolean;
+    /**
+     * What this reference establishes.
+     */
+    title: string;
+    /**
+     * Canonical documentation or commit-pinned source URL.
+     */
+    url: string;
+};
+
+/**
+ * An edit generated from supported old source bytes.
+ */
+export type FileEdit = {
+    /**
+     * Exact supported input bytes retained for diff generation.
+     */
+    original: string;
+    /**
+     * Original path relative to the fixture.
+     */
+    path: string;
+    /**
+     * Generated replacement bytes.
+     */
+    updated: string;
+};
+
+/**
+ * How the supported source is classified.
+ */
+export type FindingDisposition = 'migrate' | 'retain_legacy' | 'require_version_evidence';
+
 export type HealthResponse = {
     status: HealthStatus;
 };
 
 export type HealthStatus = 'ok';
+
+/**
+ * A version-scoped finding with an exact source location.
+ */
+export type MigrationFinding = {
+    /**
+     * Decision derived from effective API version evidence.
+     */
+    disposition: FindingDisposition;
+    /**
+     * Path relative to the trusted fixture directory.
+     */
+    file: string;
+    /**
+     * One-based line identifying the affected expression.
+     */
+    line: number;
+    /**
+     * Explanation of the decision and its limits.
+     */
+    reason: string;
+};
+
+/**
+ * Pure analysis and edits for the supported historical Stripe migration.
+ */
+export type MigrationPlan = {
+    /**
+     * Prerequisites required before publication.
+     */
+    blockers: Array<PublicationBlocker>;
+    /**
+     * Generated source edits; controls remain unchanged.
+     */
+    edits: Array<FileEdit>;
+    /**
+     * Provider and immutable declaration references.
+     */
+    evidence: Array<EvidenceLink>;
+    /**
+     * Explicit target and preserved control decisions.
+     */
+    findings: Array<MigrationFinding>;
+    /**
+     * Target-only preview boundary.
+     */
+    scope: MigrationScope;
+    /**
+     * Explicit API version of the old target.
+     */
+    source_api_version: string;
+    /**
+     * Historical SDK supplying the legacy declarations.
+     */
+    source_sdk_version: string;
+    /**
+     * Explicit API version requested by the generated target.
+     */
+    target_api_version: string;
+    /**
+     * Historical SDK supplying the target declarations.
+     */
+    target_sdk_version: string;
+};
+
+/**
+ * Persisted local evidence, served by the API and consumed by the dashboard.
+ */
+export type MigrationReport = {
+    /**
+     * Retained unresolved prerequisites; never hidden by local success.
+     */
+    blockers: Array<PublicationBlocker>;
+    /**
+     * Actual local command outcomes.
+     */
+    checks: Array<CheckResult>;
+    /**
+     * Report creation time as milliseconds since the Unix epoch.
+     */
+    created_at_unix_ms: number;
+    /**
+     * Trusted synthetic fixture identity, `fixtures/stripe-migration`.
+     */
+    fixture: string;
+    /**
+     * Unified patch generated from the supported old source and candidate.
+     */
+    generated_diff: string;
+    /**
+     * Historical scope, source evidence, decisions, and generated edits.
+     */
+    plan: MigrationPlan;
+    /**
+     * Local Markdown PR preparation artifact with publication held.
+     */
+    pr_preview: string;
+    /**
+     * Must be [`REPORT_SCHEMA_VERSION`].
+     */
+    schema_version: number;
+    /**
+     * Source byte identities captured before verification.
+     */
+    source_fingerprints: Array<SourceFingerprint>;
+    /**
+     * Local result, independent from publication blockers.
+     */
+    verification_status: VerificationStatus;
+};
+
+export type MigrationReportError = {
+    error: MigrationReportErrorCode;
+};
+
+export type MigrationReportErrorCode = 'migration_report_not_found' | 'migration_report_unavailable';
+
+/**
+ * The preview changes only the explicitly versioned target.
+ */
+export type MigrationScope = 'explicit_target_only';
+
+/**
+ * A publication prerequisite that local checks cannot satisfy.
+ */
+export type PublicationBlocker = {
+    /**
+     * Stable prerequisite identity.
+     */
+    kind: BlockerKind;
+    /**
+     * Human-readable reason publication remains held.
+     */
+    reason: string;
+};
+
+/**
+ * Content identity for one source input.
+ */
+export type SourceFingerprint = {
+    /**
+     * Path relative to the trusted fixture directory.
+     */
+    path: string;
+    /**
+     * Lowercase hexadecimal SHA-256 of the exact input bytes.
+     */
+    sha256: string;
+};
+
+/**
+ * Local verification result; this never authorizes publication.
+ */
+export type VerificationStatus = 'locally_verified' | 'failed' | 'not_run';
 
 export type GetHealthData = {
     body?: never;
@@ -25,3 +265,32 @@ export type GetHealthResponses = {
 };
 
 export type GetHealthResponse = GetHealthResponses[keyof GetHealthResponses];
+
+export type GetLatestMigrationData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/migrations/latest';
+};
+
+export type GetLatestMigrationErrors = {
+    /**
+     * No local report configured or present
+     */
+    404: MigrationReportError;
+    /**
+     * Report unavailable: active/interrupted run, unreadable, oversized, or invalid evidence
+     */
+    503: MigrationReportError;
+};
+
+export type GetLatestMigrationError = GetLatestMigrationErrors[keyof GetLatestMigrationErrors];
+
+export type GetLatestMigrationResponses = {
+    /**
+     * Validated local report; publication blockers and failed/not-run states remain explicit
+     */
+    200: MigrationReport;
+};
+
+export type GetLatestMigrationResponse = GetLatestMigrationResponses[keyof GetLatestMigrationResponses];

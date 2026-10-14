@@ -7,3 +7,7 @@ publish = false
 
 [dependencies]
 reltide-domain = { path = "../../crates/domain" }
+serde_json = "=1.0.154"
+sha2 = "=0.11.0"
+tempfile = "=3.27.0"
+thiserror = "=2.0.21"

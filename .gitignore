@@ -22,3 +22,6 @@ out
 
 # Rust-contract-derived documentation; regenerated before docs checks/builds.
 /apps/docs/content/docs/reference/generated/
+
+# Local migration evidence and attempt markers; candidates use OS temp directories.
+/.reltide/

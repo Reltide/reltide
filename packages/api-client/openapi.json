@@ -21,10 +21,177 @@
           }
         }
       }
+    },
+    "/api/v1/migrations/latest": {
+      "get": {
+        "description": "Read validated local migration evidence from the trusted server-configured report. Reports are limited to 1 MiB. A sibling run-marker.json suppresses the report while a run is active or interrupted. All responses use Cache-Control: no-store.",
+        "operationId": "getLatestMigration",
+        "responses": {
+          "200": {
+            "description": "Validated local report; publication blockers and failed/not-run states remain explicit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationReport"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No local report configured or present",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationReportError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Report unavailable: active/interrupted run, unreadable, oversized, or invalid evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationReportError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "BlockerKind": {
+        "type": "string",
+        "description": "Reasons publication remains held even after local verification.",
+        "enum": [
+          "unknown_account_default",
+          "independent_review_missing"
+        ]
+      },
+      "CheckKind": {
+        "type": "string",
+        "description": "Fixed local verification identities; callers cannot replace mandatory checks.",
+        "enum": [
+          "before_typecheck",
+          "before_baseline",
+          "before_regression",
+          "candidate_typecheck",
+          "candidate_regression",
+          "pinned_control",
+          "unknown_control"
+        ]
+      },
+      "CheckResult": {
+        "type": "object",
+        "description": "Bounded command evidence captured by the Rust runner.",
+        "required": [
+          "kind",
+          "command",
+          "status",
+          "output",
+          "duration_ms"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Actual command executed, including its fixed arguments."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Measured elapsed command time in milliseconds.",
+            "minimum": 0
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Actual process exit code when available."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CheckKind",
+            "description": "Fixed verification identity."
+          },
+          "output": {
+            "type": "string",
+            "description": "Retained combined output, at most [`MAX_CHECK_OUTPUT_BYTES`] bytes."
+          },
+          "status": {
+            "$ref": "#/components/schemas/CheckStatus",
+            "description": "Outcome distinguished from publication readiness."
+          }
+        }
+      },
+      "CheckStatus": {
+        "type": "string",
+        "description": "Outcome of a real command, separating evidenced regression from failures.",
+        "enum": [
+          "passed",
+          "expected_failure",
+          "failed",
+          "not_run"
+        ]
+      },
+      "EvidenceLink": {
+        "type": "object",
+        "description": "Authoritative provider or immutable SDK source supporting a decision.",
+        "required": [
+          "title",
+          "url",
+          "immutable"
+        ],
+        "properties": {
+          "immutable": {
+            "type": "boolean",
+            "description": "Whether the reference pins immutable source bytes through a commit."
+          },
+          "title": {
+            "type": "string",
+            "description": "What this reference establishes."
+          },
+          "url": {
+            "type": "string",
+            "description": "Canonical documentation or commit-pinned source URL."
+          }
+        }
+      },
+      "FileEdit": {
+        "type": "object",
+        "description": "An edit generated from supported old source bytes.",
+        "required": [
+          "path",
+          "original",
+          "updated"
+        ],
+        "properties": {
+          "original": {
+            "type": "string",
+            "description": "Exact supported input bytes retained for diff generation."
+          },
+          "path": {
+            "type": "string",
+            "description": "Original path relative to the fixture."
+          },
+          "updated": {
+            "type": "string",
+            "description": "Generated replacement bytes."
+          }
+        }
+      },
+      "FindingDisposition": {
+        "type": "string",
+        "description": "How the supported source is classified.",
+        "enum": [
+          "migrate",
+          "retain_legacy",
+          "require_version_evidence"
+        ]
+      },
       "HealthResponse": {
         "type": "object",
         "required": [
@@ -40,6 +207,242 @@
         "type": "string",
         "enum": [
           "ok"
+        ]
+      },
+      "MigrationFinding": {
+        "type": "object",
+        "description": "A version-scoped finding with an exact source location.",
+        "required": [
+          "file",
+          "line",
+          "disposition",
+          "reason"
+        ],
+        "properties": {
+          "disposition": {
+            "$ref": "#/components/schemas/FindingDisposition",
+            "description": "Decision derived from effective API version evidence."
+          },
+          "file": {
+            "type": "string",
+            "description": "Path relative to the trusted fixture directory."
+          },
+          "line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "One-based line identifying the affected expression.",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string",
+            "description": "Explanation of the decision and its limits."
+          }
+        }
+      },
+      "MigrationPlan": {
+        "type": "object",
+        "description": "Pure analysis and edits for the supported historical Stripe migration.",
+        "required": [
+          "source_sdk_version",
+          "target_sdk_version",
+          "source_api_version",
+          "target_api_version",
+          "scope",
+          "evidence",
+          "findings",
+          "edits",
+          "blockers"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicationBlocker"
+            },
+            "description": "Prerequisites required before publication."
+          },
+          "edits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileEdit"
+            },
+            "description": "Generated source edits; controls remain unchanged."
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceLink"
+            },
+            "description": "Provider and immutable declaration references."
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationFinding"
+            },
+            "description": "Explicit target and preserved control decisions."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/MigrationScope",
+            "description": "Target-only preview boundary."
+          },
+          "source_api_version": {
+            "type": "string",
+            "description": "Explicit API version of the old target."
+          },
+          "source_sdk_version": {
+            "type": "string",
+            "description": "Historical SDK supplying the legacy declarations."
+          },
+          "target_api_version": {
+            "type": "string",
+            "description": "Explicit API version requested by the generated target."
+          },
+          "target_sdk_version": {
+            "type": "string",
+            "description": "Historical SDK supplying the target declarations."
+          }
+        }
+      },
+      "MigrationReport": {
+        "type": "object",
+        "description": "Persisted local evidence, served by the API and consumed by the dashboard.",
+        "required": [
+          "schema_version",
+          "fixture",
+          "source_fingerprints",
+          "created_at_unix_ms",
+          "verification_status",
+          "plan",
+          "checks",
+          "generated_diff",
+          "pr_preview",
+          "blockers"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicationBlocker"
+            },
+            "description": "Retained unresolved prerequisites; never hidden by local success."
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckResult"
+            },
+            "description": "Actual local command outcomes."
+          },
+          "created_at_unix_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Report creation time as milliseconds since the Unix epoch.",
+            "minimum": 0
+          },
+          "fixture": {
+            "type": "string",
+            "description": "Trusted synthetic fixture identity, `fixtures/stripe-migration`."
+          },
+          "generated_diff": {
+            "type": "string",
+            "description": "Unified patch generated from the supported old source and candidate."
+          },
+          "plan": {
+            "$ref": "#/components/schemas/MigrationPlan",
+            "description": "Historical scope, source evidence, decisions, and generated edits."
+          },
+          "pr_preview": {
+            "type": "string",
+            "description": "Local Markdown PR preparation artifact with publication held."
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Must be [`REPORT_SCHEMA_VERSION`].",
+            "minimum": 0
+          },
+          "source_fingerprints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceFingerprint"
+            },
+            "description": "Source byte identities captured before verification."
+          },
+          "verification_status": {
+            "$ref": "#/components/schemas/VerificationStatus",
+            "description": "Local result, independent from publication blockers."
+          }
+        }
+      },
+      "MigrationReportError": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/MigrationReportErrorCode"
+          }
+        }
+      },
+      "MigrationReportErrorCode": {
+        "type": "string",
+        "enum": [
+          "migration_report_not_found",
+          "migration_report_unavailable"
+        ]
+      },
+      "MigrationScope": {
+        "type": "string",
+        "description": "The preview changes only the explicitly versioned target.",
+        "enum": [
+          "explicit_target_only"
+        ]
+      },
+      "PublicationBlocker": {
+        "type": "object",
+        "description": "A publication prerequisite that local checks cannot satisfy.",
+        "required": [
+          "kind",
+          "reason"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/BlockerKind",
+            "description": "Stable prerequisite identity."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable reason publication remains held."
+          }
+        }
+      },
+      "SourceFingerprint": {
+        "type": "object",
+        "description": "Content identity for one source input.",
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path relative to the trusted fixture directory."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Lowercase hexadecimal SHA-256 of the exact input bytes."
+          }
+        }
+      },
+      "VerificationStatus": {
+        "type": "string",
+        "description": "Local verification result; this never authorizes publication.",
+        "enum": [
+          "locally_verified",
+          "failed",
+          "not_run"
         ]
       }
     }

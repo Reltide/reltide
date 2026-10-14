@@ -1919,6 +1919,7 @@ dependencies = [
  "reltide-domain",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tower",
  "utoipa",
@@ -1947,12 +1948,21 @@ dependencies = [
 [[package]]
 name = "reltide-domain"
 version = "0.0.0"
+dependencies = [
+ "serde",
+ "thiserror",
+ "utoipa",
+]
 
 [[package]]
 name = "reltide-worker"
 version = "0.0.0"
 dependencies = [
  "reltide-domain",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

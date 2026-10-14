@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { GetHealthData, GetHealthResponses } from './types.gen';
+import type { GetHealthData, GetHealthResponses, GetLatestMigrationData, GetLatestMigrationErrors, GetLatestMigrationResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -19,3 +19,8 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
 };
 
 export const getHealth = <ThrowOnError extends boolean = false>(options?: Options<GetHealthData, ThrowOnError>): RequestResult<GetHealthResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetHealthResponses, unknown, ThrowOnError>({ url: '/api/v1/health', ...options });
+
+/**
+ * Read validated local migration evidence from the trusted server-configured report. Reports are limited to 1 MiB. A sibling run-marker.json suppresses the report while a run is active or interrupted. All responses use Cache-Control: no-store.
+ */
+export const getLatestMigration = <ThrowOnError extends boolean = false>(options?: Options<GetLatestMigrationData, ThrowOnError>): RequestResult<GetLatestMigrationResponses, GetLatestMigrationErrors, ThrowOnError> => (options?.client ?? client).get<GetLatestMigrationResponses, GetLatestMigrationErrors, ThrowOnError>({ url: '/api/v1/migrations/latest', ...options });

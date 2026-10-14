@@ -56,3 +56,46 @@ test("committed Rust contract contains the health operation", async () => {
   );
   assert.equal(contract.paths["/api/v1/health"].get.operationId, "getHealth");
 });
+
+test("committed Rust contract contains migration evidence and JSON failures", async () => {
+  const contract = JSON.parse(
+    await readFile(
+      new URL("../packages/api-client/openapi.json", import.meta.url),
+      "utf-8"
+    )
+  );
+  const operation = contract.paths["/api/v1/migrations/latest"]?.get;
+  assert.equal(operation?.operationId, "getLatestMigration");
+  assert.equal(operation.parameters, undefined);
+  assert.equal(
+    operation.responses[200].content["application/json"].schema.$ref,
+    "#/components/schemas/MigrationReport"
+  );
+  for (const status of [404, 503]) {
+    assert.equal(
+      operation.responses[status].content["application/json"].schema.$ref,
+      "#/components/schemas/MigrationReportError"
+    );
+  }
+  const { schemas } = contract.components;
+  for (const field of [
+    "verification_status",
+    "plan",
+    "checks",
+    "blockers",
+    "source_fingerprints",
+    "generated_diff",
+    "pr_preview",
+  ]) {
+    assert.ok(schemas.MigrationReport.required.includes(field));
+  }
+  assert.deepEqual(schemas.VerificationStatus.enum, [
+    "locally_verified",
+    "failed",
+    "not_run",
+  ]);
+  assert.deepEqual(schemas.BlockerKind.enum, [
+    "unknown_account_default",
+    "independent_review_missing",
+  ]);
+});
