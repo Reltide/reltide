@@ -1958,6 +1958,10 @@ name = "reltide-worker"
 version = "0.0.0"
 dependencies = [
  "reltide-domain",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

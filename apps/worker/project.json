@@ -42,6 +42,14 @@
       },
       "inputs": ["default", "^default"],
       "cache": false
+    },
+    "stripe-demo": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo run -p reltide-worker --locked -- stripe-demo",
+        "cwd": "{workspaceRoot}"
+      },
+      "cache": false
     }
   }
 }
