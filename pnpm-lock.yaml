@@ -256,8 +256,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0(@types/react@19.3.0)
       postcss:
-        specifier: 8.5.29
-        version: 8.5.29
+        specifier: 8.5.30
+        version: 8.5.30
       tailwindcss:
         specifier: 4.3.3
         version: 4.3.3
@@ -317,8 +317,8 @@ importers:
         specifier: 1.6.7
         version: 1.6.7(@types/mdast@4.0.4)(@types/unist@3.0.3)(supports-color@8.1.1)
       postcss:
-        specifier: 8.5.29
-        version: 8.5.29
+        specifier: 8.5.30
+        version: 8.5.30
       tailwindcss:
         specifier: 4.3.3
         version: 4.3.3
@@ -357,8 +357,8 @@ importers:
         specifier: 19.3.0
         version: 19.3.0(@types/react@19.3.0)
       postcss:
-        specifier: 8.5.29
-        version: 8.5.29
+        specifier: 8.5.30
+        version: 8.5.30
       tailwindcss:
         specifier: 4.3.3
         version: 4.3.3
@@ -5578,6 +5578,10 @@ packages:
     resolution: {integrity: sha512-49cGhUbXj8Qenv0iTMxA1cFBzxXoctpC9Ujd77t1WcbJIr6nF/eI7g/8MgxrYldFRuAXvja7xQRwavoW7kgrxQ==}
     engines: {node: ^10 || ^12 || >=14}
 
+  postcss@8.5.30:
+    resolution: {integrity: sha512-zkd+e9S1AQHhmaBKye9zlFHWjOwVgqXl1q3ECYy8561K7qxR2cREf/STLskulBFd78k6AOFeA+ff1TtEzk9bAA==}
+    engines: {node: ^10 || ^12 || >=14}
+
   powershell-utils@0.1.0:
     resolution: {integrity: sha512-dM0jVuXJPsDN6DvRpea484tCUaMiXWjuCn++HGTqUWzGDjv5tZkEZldAJ/UMlqRYGFrD/etByo4/xOuC/snX2A==}
     engines: {node: '>=20'}
@@ -9151,7 +9155,7 @@ snapshots:
       '@alloc/quick-lru': 5.3.0
       '@tailwindcss/node': 4.3.3
       '@tailwindcss/oxide': 4.3.3
-      postcss: 8.5.29
+      postcss: 8.5.30
       tailwindcss: 4.3.3
 
   '@tailwindcss/typography@0.5.20(tailwindcss@4.3.3)':
@@ -11947,6 +11951,12 @@ snapshots:
       source-map-js: 1.2.2
 
   postcss@8.5.29:
+    dependencies:
+      nanoid: 3.3.20
+      picocolors: 1.1.1
+      source-map-js: 1.2.2
+
+  postcss@8.5.30:
     dependencies:
       nanoid: 3.3.20
       picocolors: 1.1.1
