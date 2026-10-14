@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "seed": {
+    "current_events": 2592000,
+    "aged_events": 25920,
+    "events_per_second": 200,
+    "max_batch": 256,
+    "payload_bytes": 1024,
+    "ledger_rows": 100000,
+    "analytics_rows": 10000
+  },
+  "telemetry_events_per_second": 10,
+  "foreground_interval_ms": 10000,
+  "workflow_interval_ms": 10000,
+  "retention_days": 3,
+  "expiry_deadline_ms": 3600000,
+  "phases": [
+    { "name": "idle", "duration_ms": 900000, "http_rps": 0 },
+    { "name": "ramp-1", "duration_ms": 600000, "http_rps": 1 },
+    { "name": "ramp-3", "duration_ms": 600000, "http_rps": 3 },
+    { "name": "ramp-5", "duration_ms": 600000, "http_rps": 5 },
+    { "name": "soak", "duration_ms": 7200000, "http_rps": 5 },
+    { "name": "final", "duration_ms": 900000, "http_rps": 5 }
+  ]
+}
