@@ -6,7 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-temporalio-sdk = { version = "=1.0.0", default-features = false, features = [
+temporalio-sdk = { version = "=1.1.0", default-features = false, features = [
   "envconfig",
   "prometheus",
 ] }
@@ -31,7 +31,7 @@ sha2 = "=0.11.0"
 thiserror = "=2.0.21"
 
 [dev-dependencies]
-temporalio-sdk = { version = "=1.0.0", default-features = false, features = [
+temporalio-sdk = { version = "=1.1.0", default-features = false, features = [
   "testing",
   "envconfig",
   "prometheus",
