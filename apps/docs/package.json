@@ -21,8 +21,8 @@
     "fumadocs-ui": "16.16.2",
     "geist": "1.7.2",
     "next": "16.4.2",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "shiki": "4.5.0"
   },
   "devDependencies": {
