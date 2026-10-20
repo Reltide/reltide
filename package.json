@@ -26,8 +26,8 @@
     "@swc/helpers": "0.5.23"
   },
   "devDependencies": {
-    "@commitlint/cli": "21.2.3",
-    "@commitlint/config-conventional": "21.2.3",
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
     "@commitlint/types": "21.2.3",
     "@nx/next": "23.3.0",
     "@swc-node/register": "1.12.1",
