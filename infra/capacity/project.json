@@ -10,6 +10,28 @@
     "reltide-capacity-probe"
   ],
   "targets": {
+    "host-offline": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "inputs": [
+        "default",
+        "rustGlobals",
+        "{workspaceRoot}/tools/capacity/**/*"
+      ],
+      "options": {
+        "command": "pnpm exec vitest run tools/capacity/host.test.mjs tools/capacity/config.test.mjs"
+      }
+    },
+    "host-preflight": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "inputs": [
+        "default",
+        "rustGlobals",
+        "{workspaceRoot}/tools/capacity/**/*"
+      ],
+      "options": { "command": "node tools/capacity/host.mjs preflight" }
+    },
     "check-config": {
       "executor": "nx:run-commands",
       "cache": false,
